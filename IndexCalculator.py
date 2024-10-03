@@ -6,8 +6,9 @@ import math
 from dateutil import tz
 from numpy import sin, cos, arccos, pi, arcsin
 from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import ProcessPoolExecutor
 from tqdm import tqdm
+import cartopy.crs as ccrs
+import matplotlib.colors as mcolors
 
 def moving_average(data, window_size=3):
     """Функция для вычисления скользящего среднего."""
@@ -29,6 +30,7 @@ class IndexCalculator:
         self.duration_minutes = duration_minutes
         self.times = [start_date + datetime.timedelta(minutes=i) for i in range(duration_minutes)]
         self.data = self.retrieve_data()
+        self.index_ratios = self.calculate_ratios() 
 
     @staticmethod
     def get_latlon(time):
@@ -155,8 +157,7 @@ class IndexCalculator:
 
     def calculate_ratios(self):
         with ThreadPoolExecutor() as executor:
-            results = executor.map(self.process_time, self.times)
-
+            results = list(executor.map(self.process_time, self.times))
         return results
 
     def process_time(self, time):
@@ -186,80 +187,100 @@ class IndexCalculator:
 
         return (time, ratio)
 
-    # def calculate_ratios(self):
-    #     index_ratios = []
-    #     total_times = len(self.times)
+    def plot_and_save_all_maps(self):
+        """Рисует и сохраняет карты данных для всех временных меток с графиками индексов."""
+        
+        vmin, vmax = 0.0, 0.1  # Минимальное и максимальное значения для colorbar
+        cmap = mcolors.LinearSegmentedColormap.from_list("custom_cmap", ["blue", "yellow", "red"])
+        for time in self.times:
+            print(time)
+            time_key = time.replace(tzinfo=_UTC)
+            if time_key not in self.data:
+                print(f"Нет данных для времени: {time}")
+                continue
 
-    #     for idx, time in enumerate(self.times):
-    #         print(f"Обработка {idx + 1}/{total_times}: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+            # Получаем данные: lat, lon, value
+            data_points = self.data[time_key]
+            
+            latitudes = [point[0] for point in data_points]  # Широта
+            longitudes = [point[1] for point in data_points]  # Долгота
+            values = [point[2] for point in data_points]       # Значение
 
-    #         time_key = time.replace(tzinfo=_UTC)  
-    #         points = self.data.get(time_key, [])
-    #         days = []
-    #         nights = []
-    #         for point in points:
-    #             late, lone = self.get_latlon(time)
-    #             Re = self.great_circle_distance(late, lone, point[0], point[1])
+            times, ratios = [], []
+            for t, ratio in self.index_ratios:
+                times.append(t)
+                ratios.append(ratio)
+            
+            ratio = ratios[0]  # Берем первый найденный индекс
 
-    #             if self.is_daytime(point[1], time):
-    #                 days.append((Re, point[2]))
-    #             else:
-    #                 nights.append((Re, point[2]))
+            # Создание общей фигуры с двумя подграфиками
+            fig = plt.figure(figsize=(12, 10))
+            gs = fig.add_gridspec(2, 1, height_ratios=[3, 1], hspace=0.4)  # Увеличенный отступ между подграфиками
 
-    #         total_index_day = self.calculate_index(days)
-    #         total_index_night = self.calculate_index(nights)
-    #         if total_index_night != 0:  # Проверяем, чтобы избежать деления на ноль
-    #             ratio = total_index_day / total_index_night
-    #         else:
-    #             ratio = 0.0
+            # Создаем проекцию карты для верхнего подграфика
+            ax = fig.add_subplot(gs[0], projection=ccrs.PlateCarree())
+            ax.set_extent([-180, 180, -90, 90])  # Установка диапазона
+            ax.coastlines()
+            ax.set_title(f'Карта данных в момент времени {time_key.strftime("%Y-%m-%d %H:%M:%S")}', fontsize=16)
+            
+            # Построение карты с цветами по значениям на верхнем subplot
+            scatter = ax.scatter(longitudes, latitudes, c=values, cmap=cmap, s=10, vmin=vmin, vmax=vmax, transform=ccrs.PlateCarree())
+            
+            # Добавление colorbar
+            cbar = plt.colorbar(scatter, ax=ax, orientation='vertical', pad=0.05)
+            cbar.set_label('Значение')
+            self.plot_terminator(ax, time)
 
+            # Построение графика индексов на нижнем subplot
+            ax_index = fig.add_subplot(gs[1])
+            ax_index.plot(times, ratios, label='Индекс', color='orange', linewidth=2)
+            ax_index.set_title('График индексов', fontsize=16)
+            ax_index.set_xlabel('Время', fontsize=14)
+            ax_index.set_ylabel('Индекс', fontsize=14)
+            ax_index.axvline(x=time_key, color='red', linestyle='--', label='Текущее время')
+            ax_index.legend()
+            ax_index.grid()
 
-    #         index_ratios.append((time, ratio))
+            # Сохранение карты и графика индексов как PNG
+            filename = f"map_with_index_{time_key.strftime('%Y%m%d_%H%M%S')}.png"
+            plt.savefig(filename, bbox_inches='tight')
+            plt.close(fig)  # Закрытие фигуры для освобождения памяти
+            print(f"Сохранена карта и график индексов для времени {time_key} в файл {filename}")
 
-    #     return index_ratios
+    def plot_terminator(self, ax, time=None, color="black", alpha=0.5):
+        """
+        Plot a fill on the dark side of the planet (without refraction).
 
+        Parameters
+        ----------
+            ax: axes of matplotlib.plt
+                of matplotlib.plt to plot on
+            time : datetime
+                The time to calculate terminator for. Defaults to datetime.utcnow()
+        """
+        lat, lon = self.get_latlon(time)
+        pole_lng = lon
+        if lat > 0:
+            pole_lat = -90 + lat
+            central_rot_lng = 180
+        else:
+            pole_lat = 90 + lat
+            central_rot_lng = 0
 
-file_path = "dtec_2_10_2017_001_-90_90_N_-180_180_E_3d57.h5"
-# file_path = "roti_2011_249_-90_90_N_-180_180_E_9caa.h5"
-start_date = datetime.datetime(2017, 1, 1, 0, 0, 0)
+        rotated_pole = ccrs.RotatedPole(pole_latitude=pole_lat,
+                                        pole_longitude=pole_lng,
+                                        central_rotated_longitude=central_rot_lng)
+
+        x = [-90] * 181 + [90] * 181 + [-90]
+        y = list(range(-90, 91)) + list(range(90, -91, -1)) + [-90]
+        ax.fill(x, y, transform=rotated_pole,
+                color=color, alpha=alpha, zorder=3)
+
+# file_path = "dtec_2_10_2017_001_-90_90_N_-180_180_E_3d57.h5"
+file_path = "roti_2011_249_-90_90_N_-180_180_E_9caa.h5"
+start_date = datetime.datetime(2011, 9, 6, 21, 57, 0)
 import matplotlib.pyplot as plt
-calculator = IndexCalculator(file_path, start_date, 1440)
-ratios = calculator.calculate_ratios()
+calculator = IndexCalculator(file_path, start_date, 42)
+# ratios = calculator.calculate_ratios()
 
-# Инициализация списков для времени и значений
-times, values = [], []
-for time, ratio in ratios:
-    times.append(time)
-    values.append(ratio)
-
-# Вычисляем сглаженные значения (например, с окном = 5)
-window_size = 5
-smoothed_values = moving_average(values, window_size=window_size)
-
-# Обрезаем список times, чтобы его длина соответствовала длине сглаженных данных
-# (т.к. после сглаживания длина данных уменьшится)
-smoothed_times = times[:len(smoothed_values)]
-
-# Построение графиков
-plt.figure(figsize=(12, 6))
-
-# График без сглаживания
-plt.subplot(2, 1, 1)
-plt.plot(times, values, marker='o', label='Без сглаживания')
-plt.title('График значений без сглаживания')
-plt.xlabel('Время')
-plt.ylabel('Значение')
-plt.xticks(rotation=45)
-plt.grid(True)
-
-# График со сглаживанием
-plt.subplot(2, 1, 2)
-plt.plot(smoothed_times, smoothed_values, marker='o', color='orange', label=f'Со сглаживанием (окно = {window_size})')
-plt.title('График значений со сглаживанием')
-plt.xlabel('Время')
-plt.ylabel('Значение')
-plt.xticks(rotation=45)
-plt.grid(True)
-
-plt.tight_layout()  # Подгоняем элементы графика
-plt.show()
+calculator.plot_and_save_all_maps()
