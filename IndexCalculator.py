@@ -9,6 +9,10 @@ from concurrent.futures import ThreadPoolExecutor
 from tqdm import tqdm
 import cartopy.crs as ccrs
 import matplotlib.colors as mcolors
+import matplotlib.pyplot as plt
+from sunpy.net import Fido
+from sunpy.net import attrs as a
+from astropy.time import Time
 
 def moving_average(data, window_size=3):
     """Функция для вычисления скользящего среднего."""
@@ -31,6 +35,48 @@ class IndexCalculator:
         self.times = [start_date + datetime.timedelta(minutes=i) for i in range(duration_minutes)]
         self.data = self.retrieve_data()
         self.index_ratios = self.calculate_ratios() 
+
+    def get_flare_data(self):
+        """
+        Получает данные о солнечных вспышках для заданного периода времени.
+        Использует библиотеку SunPy для получения данных о вспышках через Fido.
+        """
+        # Извлекаем год, месяц и день из стартовой даты
+        year, month, day = self.start_date.year, self.start_date.month, self.start_date.day
+        
+        # Создаем tstart и tend
+        tstart = f"{year}/{month:02d}/{day:02d}"
+        tend = f"{year}/{month:02d}/{day+1:02d}"  # Один день после для полного захвата
+
+        # Параметры поиска солнечных вспышек
+        event_type = "FL"
+        result = Fido.search(a.Time(tstart, tend), a.hek.EventType(event_type))
+        
+        # Извлекаем результаты
+        hek_results = result['hek']
+        filtered_results = hek_results["event_starttime", "event_peaktime", "event_endtime", "fl_goescls"]
+
+        # Определяем функцию для вычисления величины вспышки, учитывая все варианты
+        def get_flare_magnitude(flare):
+            fl_goescls = flare.get('fl_goescls', '')
+            if len(fl_goescls) > 1:
+                return ord(fl_goescls[0]) + float(fl_goescls[1:])
+            elif fl_goescls:  # Если есть хотя бы один символ (например, класс без числа)
+                return ord(fl_goescls[0])
+            else:
+                return -float('inf')  # Присваиваем минимальное значение, если класс пустой
+
+        # Сортируем вспышки по величине
+        by_magnitude = sorted(filtered_results, key=get_flare_magnitude, reverse=True)
+
+        # Берем первую вспышку с наибольшим классом
+        if by_magnitude:
+            flare = by_magnitude[0]
+            flare_class = flare.get('fl_goescls', 'Unknown')
+            flare_time = flare['event_starttime']
+            return flare_class, flare_time
+        else:
+            return None, None
 
     @staticmethod
     def get_latlon(time):
@@ -103,20 +149,6 @@ class IndexCalculator:
         cosgamma = min(1, max(-1, cosgamma))
 
         return R * math.acos(cosgamma)
-    
-    # @staticmethod
-    # def calculate_solar_angle(longitude, time):
-    #     solar_time = (time.hour + time.minute / 60) * 15
-    #     solar_angle = (solar_time + longitude) % 360
-    #     return solar_angle
-
-    # def is_daytime(self, lon, time):
-    #     solar_angle = self.calculate_solar_angle(lon, time)
-
-    #     object_angle = lon
-
-    #     return (solar_angle < 180 and object_angle < 180) or (solar_angle >= 180 and object_angle >= 180)
-
     def is_daytime(self, lat, lon, time):
         late, lone = self.get_latlon(time)
         # print(late, lone)
@@ -189,7 +221,9 @@ class IndexCalculator:
 
     def plot_and_save_all_maps(self):
         """Рисует и сохраняет карты данных для всех временных меток с графиками индексов."""
-        
+        flare_class, flare_time = self.get_flare_data()
+        if flare_time:
+            flare_time = Time(flare_time).to_datetime()
         vmin, vmax = 0.0, 0.1  # Минимальное и максимальное значения для colorbar
         cmap = mcolors.LinearSegmentedColormap.from_list("custom_cmap", ["blue", "yellow", "red"])
         for time in self.times:
@@ -238,6 +272,12 @@ class IndexCalculator:
             ax_index.set_xlabel('Время', fontsize=14)
             ax_index.set_ylabel('Индекс', fontsize=14)
             ax_index.axvline(x=time_key, color='red', linestyle='--', label='Текущее время')
+
+            if flare_time and flare_class:
+                ax_index.axvline(x=flare_time, color='blue', linestyle='--', label=f'Вспышка {flare_class}')
+                ax_index.annotate(f'Вспышка {flare_class}', xy=(flare_time, max(ratios)), xytext=(flare_time, max(ratios) * 1.1),
+                                  arrowprops=dict(facecolor='blue', shrink=0.05))
+
             ax_index.legend()
             ax_index.grid()
 
@@ -276,11 +316,14 @@ class IndexCalculator:
         ax.fill(x, y, transform=rotated_pole,
                 color=color, alpha=alpha, zorder=3)
 
-# file_path = "dtec_2_10_2017_001_-90_90_N_-180_180_E_3d57.h5"
+# # file_path = "dtec_2_10_2017_001_-90_90_N_-180_180_E_3d57.h5"
 file_path = "roti_2011_249_-90_90_N_-180_180_E_9caa.h5"
 start_date = datetime.datetime(2011, 9, 6, 21, 57, 0)
-import matplotlib.pyplot as plt
 calculator = IndexCalculator(file_path, start_date, 42)
-# ratios = calculator.calculate_ratios()
-
 calculator.plot_and_save_all_maps()
+
+
+# file_path = "roti_2002_204_-90_90_N_-180_180_E_ff0b.h5"
+# start_date = datetime.datetime(2002, 7, 23, 0, 3, 0)
+# calculator = IndexCalculator(file_path, start_date, 59)
+# calculator.plot_and_save_all_maps()
