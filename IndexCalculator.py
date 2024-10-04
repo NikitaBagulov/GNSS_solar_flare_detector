@@ -317,13 +317,18 @@ class IndexCalculator:
                 color=color, alpha=alpha, zorder=3)
 
 # # file_path = "dtec_2_10_2017_001_-90_90_N_-180_180_E_3d57.h5"
-file_path = "roti_2011_249_-90_90_N_-180_180_E_9caa.h5"
-start_date = datetime.datetime(2011, 9, 6, 21, 57, 0)
-calculator = IndexCalculator(file_path, start_date, 42)
-calculator.plot_and_save_all_maps()
+# file_path = "roti_2011_249_-90_90_N_-180_180_E_9caa.h5"
+# start_date = datetime.datetime(2011, 9, 6, 21, 57, 0)
+# calculator = IndexCalculator(file_path, start_date, 42)
+# calculator.plot_and_save_all_maps()
 
 
 # file_path = "roti_2002_204_-90_90_N_-180_180_E_ff0b.h5"
 # start_date = datetime.datetime(2002, 7, 23, 0, 3, 0)
 # calculator = IndexCalculator(file_path, start_date, 59)
 # calculator.plot_and_save_all_maps()
+
+file_path = "roti_2015_125_-90_90_N_-180_180_E_0dfb.h5"
+start_date = datetime.datetime(2015, 5, 5, 21, 50, 0)
+calculator = IndexCalculator(file_path, start_date, 40)
+calculator.plot_and_save_all_maps()
