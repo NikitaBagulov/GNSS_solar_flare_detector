@@ -298,6 +298,56 @@ class IndexCalculator:
                     fontsize=12,
                     ha='center'
                 )
+                delta_sec = 30 * 60  # 30 минут
+                interval_start = flare_time
+                interval_end = flare_time + datetime.timedelta(seconds=delta_sec)
+
+                # Преобразуем список times в массив NumPy и выполним поэлементное сравнение
+                times_np = np.array(times)
+                ratios_np = np.array(ratios)
+
+                # Ищем моменты резкого роста и падения индекса
+                ratio_diff = np.diff(ratios_np)  # Вычисляем разность значений индекса
+                threshold = 0.5  # Порог для резкого изменения индекса
+
+                significant_increase = np.where(ratio_diff > threshold)[0]
+                significant_decrease = np.where(ratio_diff < -threshold)[0]
+
+                # Найдем моменты времени для начала и конца области резкого изменения
+                start_time = None
+                end_time = None
+
+                for idx in significant_increase:
+                    if flare_time <= times_np[idx] <= interval_end:
+                        start_time = times_np[idx]
+                        break
+
+                for idx in significant_decrease:
+                    if flare_time <= times_np[idx] <= interval_end and start_time:
+                        end_time = times_np[idx]
+                        break
+
+                if start_time and end_time:
+                    # Вычисляем среднее значение индекса в области
+                    interval_ratios = ratios_np[(times_np >= start_time) & (times_np <= end_time)]
+                    average_ratio = np.mean(interval_ratios)
+
+                    # Поставим метку на графике на месте среднего значения
+                    average_time = start_time + (end_time - start_time) / 2
+                    ax_index.axvline(x=average_time, color='green', linestyle='--', label='Среднее в области')
+                    ax_index.annotate(
+                        'Среднее',
+                        xy=(average_time, average_ratio),
+                        xytext=(average_time, average_ratio * 1.2),
+                        textcoords='data',
+                        arrowprops=dict(facecolor='green', shrink=0.05),
+                        fontsize=12,
+                        ha='center'
+                    )
+
+                    # Выделим область резкого изменения на графике
+                    ax_index.axvspan(start_time, end_time, color='yellow', alpha=0.3, label='Область резкого изменения')
+
 
             ax_index.legend()
             ax_index.grid()
@@ -348,12 +398,12 @@ class IndexCalculator:
 # calculator = IndexCalculator(file_path, start_date, 59)
 # calculator.plot_and_save_all_maps()
 
-# file_path = "roti_2015_125_-90_90_N_-180_180_E_0dfb.h5"
-# start_date = datetime.datetime(2015, 5, 5, 21, 50, 0)
-# calculator = IndexCalculator(file_path, start_date, 40)
-# calculator.plot_and_save_all_maps()
-
-file_path = "roti_2024_214_-90_90_N_-180_180_E_8ed2.h5"
-start_date = datetime.datetime(2024, 8, 1, 0, 0, 0)
-calculator = IndexCalculator(file_path, start_date, 1440) #1440
+file_path = "roti_2015_125_-90_90_N_-180_180_E_0dfb.h5"
+start_date = datetime.datetime(2015, 5, 5, 21, 50, 0)
+calculator = IndexCalculator(file_path, start_date, 40)
 calculator.plot_and_save_all_maps()
+
+# file_path = "roti_2024_214_-90_90_N_-180_180_E_8ed2.h5"
+# start_date = datetime.datetime(2024, 8, 1, 0, 0, 0)
+# calculator = IndexCalculator(file_path, start_date, 1440) #1440
+# calculator.plot_and_save_all_maps()
