@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 from sunpy.net import Fido
 from sunpy.net import attrs as a
 from astropy.time import Time
+from pathlib import Path
 
 def moving_average(data, window_size=3):
     """Функция для вычисления скользящего среднего."""
@@ -212,8 +213,18 @@ class IndexCalculator:
                 point_progress.update(1)  # Обновляем прогресс для каждой точки
         total_index_day = self.calculate_index(days)
         total_index_night = self.calculate_index(nights)
-        if total_index_night != 0:
-            ratio = total_index_day / total_index_night
+        # day_weight = len(days)/count
+        # night_weight = len(nights)/count
+        # weighted_day = total_index_day/day_weight   
+        # weighted_night = total_index_night/night_weight
+
+        if total_index_night != 0 or count != 0:
+            day_weight = len(days)/count
+            night_weight = len(nights)/count
+            weighted_day = total_index_day/day_weight   
+            weighted_night = total_index_night/night_weight
+            # ratio = (total_index_day/len(days)) / (total_index_night/len(nights))
+            ratio = weighted_day/weighted_night
         else:
             ratio = 0.0
 
@@ -226,6 +237,8 @@ class IndexCalculator:
             flare_time = Time(flare_time).to_datetime()
         vmin, vmax = 0.0, 0.1  # Минимальное и максимальное значения для colorbar
         cmap = mcolors.LinearSegmentedColormap.from_list("custom_cmap", ["blue", "yellow", "red"])
+        folder_name = Path(f"{self.start_date.strftime('%Y%m%d')}")
+        folder_name.mkdir(parents=True, exist_ok=True)
         for time in self.times:
             print(time)
             time_key = time.replace(tzinfo=_UTC)
@@ -249,7 +262,8 @@ class IndexCalculator:
 
             # Создание общей фигуры с двумя подграфиками
             fig = plt.figure(figsize=(12, 10))
-            gs = fig.add_gridspec(2, 1, height_ratios=[3, 1], hspace=0.4)  # Увеличенный отступ между подграфиками
+            # Увеличиваем отступ между подграфиками
+            gs = fig.add_gridspec(2, 1, height_ratios=[3, 1], hspace=0.6)  # Увеличен отступ до 0.6
 
             # Создаем проекцию карты для верхнего подграфика
             ax = fig.add_subplot(gs[0], projection=ccrs.PlateCarree())
@@ -268,22 +282,28 @@ class IndexCalculator:
             # Построение графика индексов на нижнем subplot
             ax_index = fig.add_subplot(gs[1])
             ax_index.plot(times, ratios, label='Индекс', color='orange', linewidth=2)
-            ax_index.set_title('График индексов', fontsize=16)
+            ax_index.set_title('График индексов', fontsize=16, pad=70)  # Добавляем отступ между заголовком и графиком
             ax_index.set_xlabel('Время', fontsize=14)
             ax_index.set_ylabel('Индекс', fontsize=14)
             ax_index.axvline(x=time_key, color='red', linestyle='--', label='Текущее время')
 
             if flare_time and flare_class:
                 ax_index.axvline(x=flare_time, color='blue', linestyle='--', label=f'Вспышка {flare_class}')
-                ax_index.annotate(f'Вспышка {flare_class}', xy=(flare_time, max(ratios)), xytext=(flare_time, max(ratios) * 1.1),
-                                  arrowprops=dict(facecolor='blue', shrink=0.05))
+                ax_index.annotate(
+                    f'Вспышка {flare_class}', 
+                    xy=(flare_time, max(ratios)), 
+                    xytext=(flare_time, max(ratios) * 1.3),  # Увеличенный сдвиг аннотации выше
+                    textcoords='data',
+                    arrowprops=dict(facecolor='blue', shrink=0.05),
+                    fontsize=12,
+                    ha='center'
+                )
 
             ax_index.legend()
             ax_index.grid()
-
             # Сохранение карты и графика индексов как PNG
             filename = f"map_with_index_{time_key.strftime('%Y%m%d_%H%M%S')}.png"
-            plt.savefig(filename, bbox_inches='tight')
+            plt.savefig(f"{time_key.strftime('%Y%m%d')}/{filename}", bbox_inches='tight')
             plt.close(fig)  # Закрытие фигуры для освобождения памяти
             print(f"Сохранена карта и график индексов для времени {time_key} в файл {filename}")
 
@@ -316,7 +336,7 @@ class IndexCalculator:
         ax.fill(x, y, transform=rotated_pole,
                 color=color, alpha=alpha, zorder=3)
 
-# # file_path = "dtec_2_10_2017_001_-90_90_N_-180_180_E_3d57.h5"
+
 # file_path = "roti_2011_249_-90_90_N_-180_180_E_9caa.h5"
 # start_date = datetime.datetime(2011, 9, 6, 21, 57, 0)
 # calculator = IndexCalculator(file_path, start_date, 42)
@@ -328,7 +348,12 @@ class IndexCalculator:
 # calculator = IndexCalculator(file_path, start_date, 59)
 # calculator.plot_and_save_all_maps()
 
-file_path = "roti_2015_125_-90_90_N_-180_180_E_0dfb.h5"
-start_date = datetime.datetime(2015, 5, 5, 21, 50, 0)
-calculator = IndexCalculator(file_path, start_date, 40)
+# file_path = "roti_2015_125_-90_90_N_-180_180_E_0dfb.h5"
+# start_date = datetime.datetime(2015, 5, 5, 21, 50, 0)
+# calculator = IndexCalculator(file_path, start_date, 40)
+# calculator.plot_and_save_all_maps()
+
+file_path = "roti_2024_214_-90_90_N_-180_180_E_8ed2.h5"
+start_date = datetime.datetime(2024, 8, 1, 0, 0, 0)
+calculator = IndexCalculator(file_path, start_date, 1440) #1440
 calculator.plot_and_save_all_maps()
