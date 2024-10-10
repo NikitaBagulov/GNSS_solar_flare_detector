@@ -201,10 +201,11 @@ class IndexCalculator:
         if len(points) == 0:
             return 0.0
 
-        Re = np.array([p[0] for p in points])
+        R = np.array([p[0] for p in points])
         values = np.array([p[1] for p in points])
-        eps=1e-10
-        I = (1 / (1 + np.log(Re + eps))) * values
+        # eps=1e-10
+        # I = (1 / (1 + np.log(R + eps))) * values
+        I = (1 / (1 + R)) * values
         I = np.round(I, 10)
         I = np.nan_to_num(I, nan=0.0)
         return np.sum(I)
@@ -252,7 +253,7 @@ class IndexCalculator:
         flare_list = self.get_flare_data()
         vmin, vmax = 0.0, 0.1  # Минимальное и максимальное значения для colorbar
         cmap = mcolors.LinearSegmentedColormap.from_list("custom_cmap", ["blue", "yellow", "red"])
-        folder_name = Path(f"{self.start_date.strftime('%Y%m%d')}")
+        folder_name = Path(f"{self.start_date.strftime('%Y%m%d')}_full")
         folder_name.mkdir(parents=True, exist_ok=True)
         for time in self.times:
             time_key = time.replace(tzinfo=_UTC)
@@ -353,7 +354,7 @@ class IndexCalculator:
             ax_index.grid()
             # Сохранение карты и графика индексов как PNG
             filename = f"map_with_index_{time_key.strftime('%Y%m%d_%H%M%S')}.png"
-            plt.savefig(f"{time_key.strftime('%Y%m%d')}/{filename}", bbox_inches='tight')
+            plt.savefig(f"{time_key.strftime('%Y%m%d')}_full/{filename}", bbox_inches='tight')
             plt.close(fig)  # Закрытие фигуры для освобождения памяти
             print(f"Сохранена карта и график индексов для времени {time_key} в файл {filename}")
 
@@ -398,6 +399,6 @@ class IndexCalculator:
 # calculator.plot_and_save_all_maps()
 
 file_path = "roti_2024_214_-90_90_N_-180_180_E_8ed2.h5"
-start_date = datetime.datetime(2024, 8, 1, 5, 45, 0)
-calculator = IndexCalculator(file_path, start_date, 45) #1440
+start_date = datetime.datetime(2024, 8, 1, 0, 0, 0)
+calculator = IndexCalculator(file_path, start_date, 1440) #1440
 calculator.plot_and_save_all_maps()
