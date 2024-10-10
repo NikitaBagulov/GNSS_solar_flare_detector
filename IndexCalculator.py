@@ -14,6 +14,7 @@ from sunpy.net import Fido
 from sunpy.net import attrs as a
 from astropy.time import Time
 from pathlib import Path
+import matplotlib.lines as mlines
 
 def moving_average(data, window_size=3):
     """Функция для вычисления скользящего среднего."""
@@ -41,10 +42,11 @@ class IndexCalculator:
         """
         Получает данные о солнечных вспышках для заданного периода времени.
         Использует библиотеку SunPy для получения данных о вспышках через Fido.
+        Возвращает список всех вспышек за день, которые входят в диапазон self.times.
         """
         # Извлекаем год, месяц и день из стартовой даты
         year, month, day = self.start_date.year, self.start_date.month, self.start_date.day
-        
+
         # Создаем tstart и tend
         tstart = f"{year}/{month:02d}/{day:02d}"
         tend = f"{year}/{month:02d}/{day+1:02d}"  # Один день после для полного захвата
@@ -52,7 +54,7 @@ class IndexCalculator:
         # Параметры поиска солнечных вспышек
         event_type = "FL"
         result = Fido.search(a.Time(tstart, tend), a.hek.EventType(event_type))
-        
+
         # Извлекаем результаты
         hek_results = result['hek']
         filtered_results = hek_results["event_starttime", "event_peaktime", "event_endtime", "fl_goescls"]
@@ -67,17 +69,37 @@ class IndexCalculator:
             else:
                 return -float('inf')  # Присваиваем минимальное значение, если класс пустой
 
+        # Преобразуем self.times в список дат
+        time_range_start = min(self.times)
+        time_range_end = max(self.times)
+
         # Сортируем вспышки по величине
         by_magnitude = sorted(filtered_results, key=get_flare_magnitude, reverse=True)
 
-        # Берем первую вспышку с наибольшим классом
-        if by_magnitude:
-            flare = by_magnitude[0]
-            flare_class = flare.get('fl_goescls', 'Unknown')
-            flare_time = flare['event_starttime']
-            return flare_class, flare_time
-        else:
-            return None, None
+        # Используем множество для отслеживания уникальных вспышек по времени начала
+        unique_flares = set()
+
+        # Формируем список всех вспышек, которые попадают в диапазон self.times и имеют название
+        flare_list = []
+        for flare in by_magnitude:
+            flare_class = flare.get('fl_goescls', '').strip()
+            flare_time = Time(flare['event_starttime']).to_datetime()
+            flare_peak = Time(flare['event_peaktime']).to_datetime()
+            flare_end = Time(flare['event_endtime']).to_datetime()
+
+            # Проверяем, есть ли название класса вспышки и входит ли она в диапазон self.times
+            if flare_class and (time_range_start <= flare_time <= time_range_end) and (time_range_start <= flare_end <= time_range_end):
+                if flare_time not in unique_flares:  # Проверяем уникальность по времени начала
+                    unique_flares.add(flare_time)
+                    flare_list.append({
+                        'class': flare_class,
+                        'start_time': flare_time,
+                        'peak_time': flare_peak,
+                        'end_time': flare_end
+                    })
+
+        # Возвращаем список всех подходящих вспышек
+        return flare_list
 
     @staticmethod
     def get_latlon(time):
@@ -181,8 +203,8 @@ class IndexCalculator:
 
         Re = np.array([p[0] for p in points])
         values = np.array([p[1] for p in points])
-
-        I = (1 / (1 - Re)) * values
+        eps=1e-10
+        I = (1 / (1 + np.log(Re + eps))) * values
         I = np.round(I, 10)
         I = np.nan_to_num(I, nan=0.0)
         return np.sum(I)
@@ -213,17 +235,12 @@ class IndexCalculator:
                 point_progress.update(1)  # Обновляем прогресс для каждой точки
         total_index_day = self.calculate_index(days)
         total_index_night = self.calculate_index(nights)
-        # day_weight = len(days)/count
-        # night_weight = len(nights)/count
-        # weighted_day = total_index_day/day_weight   
-        # weighted_night = total_index_night/night_weight
 
         if total_index_night != 0 or count != 0:
             day_weight = len(days)/count
             night_weight = len(nights)/count
             weighted_day = total_index_day/day_weight   
             weighted_night = total_index_night/night_weight
-            # ratio = (total_index_day/len(days)) / (total_index_night/len(nights))
             ratio = weighted_day/weighted_night
         else:
             ratio = 0.0
@@ -232,15 +249,12 @@ class IndexCalculator:
 
     def plot_and_save_all_maps(self):
         """Рисует и сохраняет карты данных для всех временных меток с графиками индексов."""
-        flare_class, flare_time = self.get_flare_data()
-        if flare_time:
-            flare_time = Time(flare_time).to_datetime()
+        flare_list = self.get_flare_data()
         vmin, vmax = 0.0, 0.1  # Минимальное и максимальное значения для colorbar
         cmap = mcolors.LinearSegmentedColormap.from_list("custom_cmap", ["blue", "yellow", "red"])
         folder_name = Path(f"{self.start_date.strftime('%Y%m%d')}")
         folder_name.mkdir(parents=True, exist_ok=True)
         for time in self.times:
-            print(time)
             time_key = time.replace(tzinfo=_UTC)
             if time_key not in self.data:
                 print(f"Нет данных для времени: {time}")
@@ -263,93 +277,79 @@ class IndexCalculator:
             # Создание общей фигуры с двумя подграфиками
             fig = plt.figure(figsize=(12, 10))
             # Увеличиваем отступ между подграфиками
-            gs = fig.add_gridspec(2, 1, height_ratios=[3, 1], hspace=0.6)  # Увеличен отступ до 0.6
+            gs = fig.add_gridspec(2, 1, height_ratios=[3, 1], hspace=0.4)  # Увеличен отступ до 0.6
 
             # Создаем проекцию карты для верхнего подграфика
             ax = fig.add_subplot(gs[0], projection=ccrs.PlateCarree())
             ax.set_extent([-180, 180, -90, 90])  # Установка диапазона
             ax.coastlines()
-            ax.set_title(f'Карта данных в момент времени {time_key.strftime("%Y-%m-%d %H:%M:%S")}', fontsize=16)
+            ax.set_title(f'Data map at a point in time {time_key.strftime("%Y-%m-%d %H:%M:%S")}', fontsize=16)
             
             # Построение карты с цветами по значениям на верхнем subplot
             scatter = ax.scatter(longitudes, latitudes, c=values, cmap=cmap, s=10, vmin=vmin, vmax=vmax, transform=ccrs.PlateCarree())
             
             # Добавление colorbar
-            cbar = plt.colorbar(scatter, ax=ax, orientation='vertical', pad=0.05)
-            cbar.set_label('Значение')
+            cbar = plt.colorbar(scatter, ax=ax, fraction=0.046 * (ax.get_position().height / ax.get_position().width), pad=0.04)
+            cbar.set_label('Value')
             self.plot_terminator(ax, time)
 
             # Построение графика индексов на нижнем subplot
             ax_index = fig.add_subplot(gs[1])
             ax_index.plot(times, ratios, label='Индекс', color='orange', linewidth=2)
-            ax_index.set_title('График индексов', fontsize=16, pad=70)  # Добавляем отступ между заголовком и графиком
-            ax_index.set_xlabel('Время', fontsize=14)
-            ax_index.set_ylabel('Индекс', fontsize=14)
-            ax_index.axvline(x=time_key, color='red', linestyle='--', label='Текущее время')
+            # ax_index.set_title('График индексов', fontsize=16, pad=70)  # Добавляем отступ между заголовком и графиком
+            ax_index.set_xlabel('Time', fontsize=14)
+            ax_index.set_ylabel('Index', fontsize=14)
+            # ax_index.axvline(x=time_key, color='red', linestyle='--', label='Текущее время')
 
-            if flare_time and flare_class:
-                ax_index.axvline(x=flare_time, color='blue', linestyle='--', label=f'Вспышка {flare_class}')
-                ax_index.annotate(
-                    f'Вспышка {flare_class}', 
-                    xy=(flare_time, max(ratios)), 
-                    xytext=(flare_time, max(ratios) * 1.3),  # Увеличенный сдвиг аннотации выше
-                    textcoords='data',
-                    arrowprops=dict(facecolor='blue', shrink=0.05),
-                    fontsize=12,
-                    ha='center'
-                )
-                delta_sec = 30 * 60  # 30 минут
-                interval_start = flare_time
-                interval_end = flare_time + datetime.timedelta(seconds=delta_sec)
 
-                # Преобразуем список times в массив NumPy и выполним поэлементное сравнение
-                times_np = np.array(times)
-                ratios_np = np.array(ratios)
 
-                # Ищем моменты резкого роста и падения индекса
-                ratio_diff = np.diff(ratios_np)  # Вычисляем разность значений индекса
-                threshold = 0.5  # Порог для резкого изменения индекса
+            colors = list(mcolors.TABLEAU_COLORS.keys())
+            legend_handles = [] 
+            for i, flare in enumerate(flare_list):
+                flare_time = flare['start_time']
+                flare_peak_time = flare.get('peak_time')  # Время пика вспышки
+                flare_end_time = flare.get('end_time')  # Время конца вспышки
+                flare_class = flare['class']
 
-                significant_increase = np.where(ratio_diff > threshold)[0]
-                significant_decrease = np.where(ratio_diff < -threshold)[0]
+                flare_color = mcolors.TABLEAU_COLORS[colors[i % len(colors)]]
 
-                # Найдем моменты времени для начала и конца области резкого изменения
-                start_time = None
-                end_time = None
+                if flare_time:
+                    ax_index.axvline(x=flare_time, color=flare_color, linestyle='--', label=f'Начало вспышки {flare_class}')
 
-                for idx in significant_increase:
-                    if flare_time <= times_np[idx] <= interval_end:
-                        start_time = times_np[idx]
-                        break
-
-                for idx in significant_decrease:
-                    if flare_time <= times_np[idx] <= interval_end and start_time:
-                        end_time = times_np[idx]
-                        break
-
-                if start_time and end_time:
-                    # Вычисляем среднее значение индекса в области
-                    interval_ratios = ratios_np[(times_np >= start_time) & (times_np <= end_time)]
-                    average_ratio = np.mean(interval_ratios)
-
-                    # Поставим метку на графике на месте среднего значения
-                    average_time = start_time + (end_time - start_time) / 2
-                    ax_index.axvline(x=average_time, color='green', linestyle='--', label='Среднее в области')
+                # Отрисовка времени пика вспышки (с аннотацией класса)
+                if flare_peak_time:
+                    ax_index.axvline(x=flare_peak_time, color=flare_color, linestyle='--', label=f'Пик вспышки {flare_class}')
                     ax_index.annotate(
-                        'Среднее',
-                        xy=(average_time, average_ratio),
-                        xytext=(average_time, average_ratio * 1.2),
+                        f'{flare_class}',  # Только класс вспышки у пика
+                        xy=(flare_peak_time, max(ratios)), 
+                        xytext=(flare_peak_time, max(ratios)), 
+                        arrowprops=dict(facecolor=flare_color, shrink=0.05), 
                         textcoords='data',
-                        arrowprops=dict(facecolor='green', shrink=0.05),
                         fontsize=12,
                         ha='center'
                     )
+                    # legend_handles.append(mlines.Line2D([0], [0], color=flare_color, linestyle='--', label=f'{flare_class}'))
 
-                    # Выделим область резкого изменения на графике
-                    ax_index.axvspan(start_time, end_time, color='yellow', alpha=0.3, label='Область резкого изменения')
+                # Отрисовка времени конца вспышки
+                if flare_end_time:
+                    ax_index.axvline(x=flare_end_time, color=flare_color, linestyle='--', label=f'Конец вспышки {flare_class}')
 
+                # Выделим область вспышки цветом
+                if flare_time and flare_end_time:
+                    ax_index.axvspan(flare_time, flare_end_time, color=flare_color, alpha=0.3, label=f'Область вспышки {flare_class}')
+            ax_index.axvline(x=time_key, color='red', linestyle='-', label='Current time')
+            ax_index.annotate(
+                'Current time',
+                xy=(time_key, min(ratios)), 
+                xytext=(time_key, max(ratios)), 
+                arrowprops=dict(facecolor='red', shrink=0.05),
+                textcoords='data',
+                fontsize=12,
+                ha='center',
+                rotation='vertical')   
 
-            ax_index.legend()
+            # legend_handles.append(mlines.Line2D([0], [0], color='red', linestyle='--', label='Текущее время'))  # Добавляем в легенду
+            # ax_index.legend(handles=legend_handles, fontsize='small', loc='upper left', bbox_to_anchor=(1, 1))  # Переносим легенду вправо
             ax_index.grid()
             # Сохранение карты и графика индексов как PNG
             filename = f"map_with_index_{time_key.strftime('%Y%m%d_%H%M%S')}.png"
@@ -392,18 +392,12 @@ class IndexCalculator:
 # calculator = IndexCalculator(file_path, start_date, 42)
 # calculator.plot_and_save_all_maps()
 
-
-# file_path = "roti_2002_204_-90_90_N_-180_180_E_ff0b.h5"
-# start_date = datetime.datetime(2002, 7, 23, 0, 3, 0)
-# calculator = IndexCalculator(file_path, start_date, 59)
+# file_path = "roti_2015_125_-90_90_N_-180_180_E_0dfb.h5"
+# start_date = datetime.datetime(2015, 5, 5, 21, 50, 0)
+# calculator = IndexCalculator(file_path, start_date, 40)
 # calculator.plot_and_save_all_maps()
 
-file_path = "roti_2015_125_-90_90_N_-180_180_E_0dfb.h5"
-start_date = datetime.datetime(2015, 5, 5, 21, 50, 0)
-calculator = IndexCalculator(file_path, start_date, 40)
+file_path = "roti_2024_214_-90_90_N_-180_180_E_8ed2.h5"
+start_date = datetime.datetime(2024, 8, 1, 5, 45, 0)
+calculator = IndexCalculator(file_path, start_date, 45) #1440
 calculator.plot_and_save_all_maps()
-
-# file_path = "roti_2024_214_-90_90_N_-180_180_E_8ed2.h5"
-# start_date = datetime.datetime(2024, 8, 1, 0, 0, 0)
-# calculator = IndexCalculator(file_path, start_date, 1440) #1440
-# calculator.plot_and_save_all_maps()
