@@ -14,7 +14,7 @@ from sunpy.net import Fido
 from sunpy.net import attrs as a
 from astropy.time import Time
 from pathlib import Path
-import matplotlib.lines as mlines
+import matplotlib.animation as animation
 
 def moving_average(data, window_size=3):
     """Функция для вычисления скользящего среднего."""
@@ -192,7 +192,7 @@ class IndexCalculator:
 
         return data
 
-    def calculate_index(self, points):
+    def calculate_index(self, points, is_day=True):
         """
         Вычисляет индекс I для списка точек с помощью векторизации.
         :param points: список точек, где каждая точка содержит (расстояние, значение)
@@ -201,11 +201,13 @@ class IndexCalculator:
         if len(points) == 0:
             return 0.0
 
-        R = np.array([p[0] for p in points])
+        d = np.array([p[0] for p in points])
         values = np.array([p[1] for p in points])
-        # eps=1e-10
-        # I = (1 / (1 + np.log(R + eps))) * values
-        I = (1 / (1 + R)) * values
+        if is_day:
+            I = (-1/math.sqrt((2*math.pi*RE_meters/4))) * d  * values
+            # I = (1 / (1 + d)) * values
+        else:
+            I=values
         I = np.round(I, 10)
         I = np.nan_to_num(I, nan=0.0)
         return np.sum(I)
@@ -399,6 +401,6 @@ class IndexCalculator:
 # calculator.plot_and_save_all_maps()
 
 file_path = "roti_2024_214_-90_90_N_-180_180_E_8ed2.h5"
-start_date = datetime.datetime(2024, 8, 1, 0, 0, 0)
-calculator = IndexCalculator(file_path, start_date, 1440) #1440
+start_date = datetime.datetime(2024, 8, 1, 5, 45, 0)
+calculator = IndexCalculator(file_path, start_date, 45) #1440
 calculator.plot_and_save_all_maps()
