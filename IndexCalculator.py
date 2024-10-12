@@ -14,7 +14,7 @@ from sunpy.net import Fido
 from sunpy.net import attrs as a
 from astropy.time import Time
 from pathlib import Path
-import matplotlib.animation as animation
+import imageio
 
 def moving_average(data, window_size=3):
     """Функция для вычисления скользящего среднего."""
@@ -228,12 +228,12 @@ class IndexCalculator:
         with tqdm(total=total_points, desc=f"Обработка точек для {time.strftime('%Y-%m-%d %H:%M:%S')}", leave=False) as point_progress:
             for point in points:
                 late, lone = self.get_latlon(time)
-                Re = self.great_circle_distance(late, lone, point[0], point[1])
+                d = self.great_circle_distance(late, lone, point[0], point[1])
 
                 if self.is_daytime(point[0], point[1], time):
-                    days.append((Re, point[2]))
+                    days.append((d, point[2]))
                 else:
-                    nights.append((Re, point[2]))
+                    nights.append((d, point[2]))
                 count+=1
                 point_progress.update(1)  # Обновляем прогресс для каждой точки
         total_index_day = self.calculate_index(days)
@@ -253,8 +253,8 @@ class IndexCalculator:
     def plot_and_save_all_maps(self):
         """Рисует и сохраняет карты данных для всех временных меток с графиками индексов."""
         flare_list = self.get_flare_data()
-        vmin, vmax = 0.0, 0.1  # Минимальное и максимальное значения для colorbar
-        cmap = mcolors.LinearSegmentedColormap.from_list("custom_cmap", ["blue", "yellow", "red"])
+        vmin, vmax = 0.0, 0.5  # Минимальное и максимальное значения для colorbar
+        cmap = mcolors.LinearSegmentedColormap.from_list("custom_cmap", ["blue","cyan", "yellow", "red"])
         folder_name = Path(f"{self.start_date.strftime('%Y%m%d')}_full")
         folder_name.mkdir(parents=True, exist_ok=True)
         for time in self.times:
@@ -360,6 +360,26 @@ class IndexCalculator:
             plt.close(fig)  # Закрытие фигуры для освобождения памяти
             print(f"Сохранена карта и график индексов для времени {time_key} в файл {filename}")
 
+        self.create_video_from_maps()
+
+    def create_video_from_maps(self, output_filename="animation.mp4"):
+        """Создает видео-анимацию из сохраненных изображений карт."""
+        folder_name = Path(f"{self.start_date.strftime('%Y%m%d')}_full")
+        images = sorted(folder_name.glob("map_with_index_*.png"))  # Собираем все PNG файлы
+        
+        if not images:
+            print("Не найдено изображений для создания видео.")
+            return
+
+        # Создаем видео
+        output_path = folder_name / output_filename
+        with imageio.get_writer(output_path, fps=2) as writer:  # fps можно настроить по желанию
+            for image_file in images:
+                image = imageio.imread(image_file)
+                writer.append_data(image)
+        
+        print(f"Видео сохранено в {output_path}")
+
     def plot_terminator(self, ax, time=None, color="black", alpha=0.5):
         """
         Plot a fill on the dark side of the planet (without refraction).
@@ -401,6 +421,6 @@ class IndexCalculator:
 # calculator.plot_and_save_all_maps()
 
 file_path = "roti_2024_214_-90_90_N_-180_180_E_8ed2.h5"
-start_date = datetime.datetime(2024, 8, 1, 5, 45, 0)
-calculator = IndexCalculator(file_path, start_date, 45) #1440
+start_date = datetime.datetime(2024, 8, 1, 5, 0, 0)
+calculator = IndexCalculator(file_path, start_date, 120) #1440
 calculator.plot_and_save_all_maps()
