@@ -14,7 +14,7 @@ from sunpy.net import Fido
 from sunpy.net import attrs as a
 from astropy.time import Time
 from pathlib import Path
-import imageio
+import imageio.v3 as iio
 
 def moving_average(data, window_size=3):
     """Функция для вычисления скользящего среднего."""
@@ -365,20 +365,39 @@ class IndexCalculator:
     def create_video_from_maps(self, output_filename="animation.mp4"):
         """Создает видео-анимацию из сохраненных изображений карт."""
         folder_name = Path(f"{self.start_date.strftime('%Y%m%d')}_full")
-        images = sorted(folder_name.glob("map_with_index_*.png"))  # Собираем все PNG файлы
+        image_files = sorted(folder_name.glob("map_with_index_*.png"))  # Собираем все PNG файлы
         
-        if not images:
+        if not image_files:
             print("Не найдено изображений для создания видео.")
             return
 
+        # Создаем список для хранения изображений
+        images = []
+        
+        for image_file in image_files:
+            # Загружаем каждое изображение
+            image = iio.imread(image_file)
+            image = self.convert_to_rgb(image)  # Читаем изображение
+            images.append(image)  # Добавляем изображение в список
+
         # Создаем видео
         output_path = folder_name / output_filename
-        with imageio.get_writer(output_path, fps=2) as writer:  # fps можно настроить по желанию
-            for image_file in images:
-                image = imageio.imread(image_file)
-                writer.append_data(image)
+        
+        # Записываем видео с помощью imageio
+        iio.imwrite(output_path, images, fps=2, codec='libx264')  # Устанавливаем частоту кадров
         
         print(f"Видео сохранено в {output_path}")
+
+    def convert_to_rgb(self, image):
+        """
+        Преобразует изображение в формат RGB, если оно имеет другую форму.
+        """
+        if len(image.shape) == 2:  # Если изображение черно-белое
+            image = np.stack([image] * 3, axis=-1)  # Дублируем каналы для создания RGB
+        elif image.shape[-1] == 4:  # Если изображение имеет альфа-канал (RGBA)
+            image = image[..., :3]  # Убираем альфа-канал
+
+        return image
 
     def plot_terminator(self, ax, time=None, color="black", alpha=0.5):
         """
@@ -420,7 +439,7 @@ class IndexCalculator:
 # calculator = IndexCalculator(file_path, start_date, 40)
 # calculator.plot_and_save_all_maps()
 
-file_path = "roti_2024_214_-90_90_N_-180_180_E_8ed2.h5"
-start_date = datetime.datetime(2024, 8, 1, 5, 0, 0)
-calculator = IndexCalculator(file_path, start_date, 120) #1440
-calculator.plot_and_save_all_maps()
+# file_path = "roti_2024_214_-90_90_N_-180_180_E_8ed2.h5"
+# start_date = datetime.datetime(2024, 8, 1, 5, 0, 0)
+# calculator = IndexCalculator(file_path, start_date, 120) #1440
+# calculator.plot_and_save_all_maps()
