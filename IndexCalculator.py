@@ -204,7 +204,7 @@ class IndexCalculator:
         d = np.array([p[0] for p in points])
         values = np.array([p[1] for p in points])
         if is_day:
-            I = (-1/math.sqrt((2*math.pi*RE_meters/4))) * d  * values
+            I = (1-1/(2*math.pi*RE_meters/4)*d) * values
             # I = (1 / (1 + d)) * values
         else:
             I=values
@@ -237,7 +237,7 @@ class IndexCalculator:
                 count+=1
                 point_progress.update(1)  # Обновляем прогресс для каждой точки
         total_index_day = self.calculate_index(days)
-        total_index_night = self.calculate_index(nights)
+        total_index_night = self.calculate_index(nights, is_day=False)
 
         if total_index_night != 0 or count != 0:
             day_weight = len(days)/count
@@ -257,6 +257,7 @@ class IndexCalculator:
         cmap = mcolors.LinearSegmentedColormap.from_list("custom_cmap", ["blue","cyan", "yellow", "red"])
         folder_name = Path(f"{self.start_date.strftime('%Y%m%d')}_full")
         folder_name.mkdir(parents=True, exist_ok=True)
+        flare_travel_time = datetime.timedelta(minutes=8.5)
         for time in self.times:
             time_key = time.replace(tzinfo=_UTC)
             if time_key not in self.data:
@@ -307,7 +308,6 @@ class IndexCalculator:
 
 
             colors = list(mcolors.TABLEAU_COLORS.keys())
-            legend_handles = [] 
             for i, flare in enumerate(flare_list):
                 flare_time = flare['start_time']
                 flare_peak_time = flare.get('peak_time')  # Время пика вспышки
@@ -317,32 +317,45 @@ class IndexCalculator:
                 flare_color = mcolors.TABLEAU_COLORS[colors[i % len(colors)]]
 
                 if flare_time:
-                    ax_index.axvline(x=flare_time, color=flare_color, linestyle='--', label=f'Начало вспышки {flare_class}')
+                    ax_index.axvline(x=flare_time, color=flare_color, linestyle='--', label=f'Start flare {flare_class}')
+                    flare_arrival_time = flare_time + flare_travel_time
+                    ax_index.axvline(x=flare_arrival_time, color=flare_color, linestyle='-', label=f'Peak (Earth) {flare_class}')
+                    ax_index.annotate(
+                        f'   {flare_class} (Earth)',  # Только класс вспышки у пика
+                        xy=(flare_arrival_time, max(ratios)), 
+                        xytext=(flare_arrival_time, max(ratios)), 
+                        arrowprops=dict(facecolor=flare_color, shrink=0.05), 
+                        textcoords='data',
+                        fontsize=12,
+                        ha='center',
+                        rotation='vertical'
+                    )
 
                 # Отрисовка времени пика вспышки (с аннотацией класса)
                 if flare_peak_time:
-                    ax_index.axvline(x=flare_peak_time, color=flare_color, linestyle='--', label=f'Пик вспышки {flare_class}')
+                    ax_index.axvline(x=flare_peak_time, color=flare_color, linestyle='--', label=f'Peak(Sun){flare_class}')
                     ax_index.annotate(
-                        f'{flare_class}',  # Только класс вспышки у пика
+                        f'   {flare_class} (Sun)',  # Только класс вспышки у пика
                         xy=(flare_peak_time, max(ratios)), 
                         xytext=(flare_peak_time, max(ratios)), 
                         arrowprops=dict(facecolor=flare_color, shrink=0.05), 
                         textcoords='data',
                         fontsize=12,
-                        ha='center'
+                        ha='center',
+                        rotation='vertical'
                     )
-                    # legend_handles.append(mlines.Line2D([0], [0], color=flare_color, linestyle='--', label=f'{flare_class}'))
+                    
 
                 # Отрисовка времени конца вспышки
                 if flare_end_time:
-                    ax_index.axvline(x=flare_end_time, color=flare_color, linestyle='--', label=f'Конец вспышки {flare_class}')
+                    ax_index.axvline(x=flare_end_time, color=flare_color, linestyle='--', label=f'End flare {flare_class}')
 
                 # Выделим область вспышки цветом
                 if flare_time and flare_end_time:
-                    ax_index.axvspan(flare_time, flare_end_time, color=flare_color, alpha=0.3, label=f'Область вспышки {flare_class}')
+                    ax_index.axvspan(flare_time, flare_end_time, color=flare_color, alpha=0.3, label=f'Flare area {flare_class}')
             ax_index.axvline(x=time_key, color='red', linestyle='-', label='Current time')
             ax_index.annotate(
-                'Current time',
+                '    Current time',
                 xy=(time_key, min(ratios)), 
                 xytext=(time_key, max(ratios)), 
                 arrowprops=dict(facecolor='red', shrink=0.05),
