@@ -1,5 +1,7 @@
 import h5py
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')
 from numpy.typing import NDArray
 import datetime
 import math
@@ -15,6 +17,7 @@ from sunpy.net import attrs as a
 from astropy.time import Time
 from pathlib import Path
 import imageio.v3 as iio
+from enum import Enum
 
 def moving_average(data, window_size=3):
     """Функция для вычисления скользящего среднего."""
@@ -28,6 +31,22 @@ DAYS = 365.25
 TILT = 23.44
 MAG1 = 9
 LON_DEGREES_HOUR = 15.
+
+class FlarePosition(Enum):
+    CENTRAL = "Центральная"
+    MEDIUM = "Средняя"
+    EDGE = "Крайняя"
+    INVISIBLE = "Невидимая"
+
+    def classify_flare(hpc_x, hpc_y):
+        if -300 <= hpc_x <= 300 and -300 <= hpc_y <= 300:
+            return FlarePosition.CENTRAL
+        elif -600 <= hpc_x <= 600 and -600 <= hpc_y <= 600:
+            return FlarePosition.MEDIUM
+        elif -960 <= hpc_x <= 960 and -960 <= hpc_y <= 960:
+            return FlarePosition.EDGE
+        else:
+            return FlarePosition.INVISIBLE
 
 class IndexCalculator:
     def __init__(self, file: str, start_date: datetime.datetime, duration_minutes: int = 60):
@@ -57,7 +76,7 @@ class IndexCalculator:
 
         # Извлекаем результаты
         hek_results = result['hek']
-        filtered_results = hek_results["event_starttime", "event_peaktime", "event_endtime", "fl_goescls"]
+        filtered_results = hek_results["event_starttime", "event_peaktime", "event_endtime", "fl_goescls", "hpc_x", "hpc_y"]
 
         # Определяем функцию для вычисления величины вспышки, учитывая все варианты
         def get_flare_magnitude(flare):
@@ -87,19 +106,27 @@ class IndexCalculator:
             flare_peak = Time(flare['event_peaktime']).to_datetime()
             flare_end = Time(flare['event_endtime']).to_datetime()
 
+            # Получаем координаты вспышки
+            hpc_x = flare.get('hpc_x', None)
+            hpc_y = flare.get('hpc_y', None)
+
             # Проверяем, есть ли название класса вспышки и входит ли она в диапазон self.times
             if flare_class and (time_range_start <= flare_time <= time_range_end) and (time_range_start <= flare_end <= time_range_end):
                 if flare_time not in unique_flares:  # Проверяем уникальность по времени начала
                     unique_flares.add(flare_time)
-                    flare_list.append({
-                        'class': flare_class,
-                        'start_time': flare_time,
-                        'peak_time': flare_peak,
-                        'end_time': flare_end
-                    })
-
-        # Возвращаем список всех подходящих вспышек
+                    
+                    # Проверяем, находится ли вспышка в центральной области солнечного диска (условно)
+                    if hpc_x is not None and hpc_y is not None:
+                            flare_list.append({
+                                'class': flare_class,
+                                'start_time': flare_time,
+                                'peak_time': flare_peak,
+                                'end_time': flare_end,
+                                'hpc_x': hpc_x,
+                                'hpc_y': hpc_y,
+                            })
         return flare_list
+
 
     @staticmethod
     def get_latlon(time):
@@ -205,7 +232,6 @@ class IndexCalculator:
         values = np.array([p[1] for p in points])
         if is_day:
             I = (1-1/(2*math.pi*RE_meters/4)*d) * values
-            # I = (1 / (1 + d)) * values
         else:
             I=values
         I = np.round(I, 10)
@@ -218,6 +244,26 @@ class IndexCalculator:
             results = list(executor.map(self.process_time, self.times))
         return results
 
+    def great_circle_distance_numpy(self, late, lone, latp, lonp, R=RE_meters):
+        """ 
+        Calculates arc length. Uses numpy arrays
+        late, latp: double
+            latitude in radians
+        lone, lonp: double
+            longitudes in radians
+        R: double
+            radius
+        """ 
+        lone[np.where(lone < 0)] = lone[np.where(lone < 0)] + 2*pi
+        lonp[np.where(lonp < 0)] = lonp[np.where(lonp < 0)] + 2*pi
+        dlon = lonp - lone
+        inds = np.where((dlon > 0) & (dlon > pi)) 
+        dlon[inds] = 2 * pi - dlon[inds]
+        dlon[np.where((dlon < 0) & (dlon < -pi))] += 2 * pi
+        dlon[np.where((dlon < 0) & (dlon < -pi))] = -dlon[np.where((dlon < 0) & (dlon < -pi))]
+        cosgamma = np.sin(late) * np.sin(latp) + np.cos(late) * np.cos(latp) * np.cos(dlon)
+        return R * arccos(cosgamma)
+
     def process_time(self, time):
         time_key = time.replace(tzinfo=_UTC)
         points = self.data.get(time_key, [])
@@ -225,28 +271,35 @@ class IndexCalculator:
         days = []
         nights = []
         count = 0
-        with tqdm(total=total_points, desc=f"Обработка точек для {time.strftime('%Y-%m-%d %H:%M:%S')}", leave=False) as point_progress:
-            for point in points:
-                late, lone = self.get_latlon(time)
-                d = self.great_circle_distance(late, lone, point[0], point[1])
 
+        latitudes = np.array([point[0] for point in points])
+        longitudes = np.array([point[1] for point in points])
+
+        late, lone = self.get_latlon(time)
+
+        late_array = np.full(latitudes.shape, late)
+        lone_array = np.full(latitudes.shape, lone)
+
+        distances = self.great_circle_distance_numpy(late_array, lone_array, latitudes, longitudes)
+
+        with tqdm(total=total_points, desc=f"Обработка точек для {time.strftime('%Y-%m-%d %H:%M:%S')}", leave=False) as point_progress:
+            for i, point in enumerate(points):
+                d = distances[i]
                 if self.is_daytime(point[0], point[1], time):
                     days.append((d, point[2]))
                 else:
                     nights.append((d, point[2]))
-                count+=1
-                point_progress.update(1)  # Обновляем прогресс для каждой точки
+                
+                count += 1
+                point_progress.update(1)
+
         total_index_day = self.calculate_index(days)
         total_index_night = self.calculate_index(nights, is_day=False)
 
         if total_index_night != 0 or count != 0:
-            day_weight = len(days)/count
-            night_weight = len(nights)/count
-            weighted_day = total_index_day/day_weight   
-            weighted_night = total_index_night/night_weight
-            ratio = weighted_day/weighted_night
-        else:
-            ratio = 0.0
+            weighted_day = total_index_day / len(days) if len(days) > 0 else 0
+            weighted_night = total_index_night / len(nights) if len(nights) > 0 else 0
+            ratio = weighted_day / weighted_night if weighted_night > 0 else 0
 
         return (time, ratio)
 
@@ -300,7 +353,6 @@ class IndexCalculator:
             # Построение графика индексов на нижнем subplot
             ax_index = fig.add_subplot(gs[1])
             ax_index.plot(times, ratios, label='Индекс', color='orange', linewidth=2)
-            # ax_index.set_title('График индексов', fontsize=16, pad=70)  # Добавляем отступ между заголовком и графиком
             ax_index.set_xlabel('Time', fontsize=14)
             ax_index.set_ylabel('Index', fontsize=14)
             # ax_index.axvline(x=time_key, color='red', linestyle='--', label='Текущее время')
@@ -313,8 +365,17 @@ class IndexCalculator:
                 flare_peak_time = flare.get('peak_time')  # Время пика вспышки
                 flare_end_time = flare.get('end_time')  # Время конца вспышки
                 flare_class = flare['class']
+                flare_position = FlarePosition.classify_flare(flare['hpc_x'], flare['hpc_y'])
 
-                flare_color = mcolors.TABLEAU_COLORS[colors[i % len(colors)]]
+                # flare_color = mcolors.TABLEAU_COLORS[colors[i % len(colors)]]
+                if flare_position == FlarePosition.CENTRAL:
+                    flare_color = 'Blue'
+                elif flare_position == FlarePosition.MEDIUM:
+                    flare_color = 'orange'
+                elif flare_position == FlarePosition.EDGE:
+                    flare_color = 'yellow'
+                else:
+                    flare_color = 'gray'
 
                 if flare_time:
                     ax_index.axvline(x=flare_time, color=flare_color, linestyle='--', label=f'Start flare {flare_class}')
@@ -452,7 +513,7 @@ class IndexCalculator:
 # calculator = IndexCalculator(file_path, start_date, 40)
 # calculator.plot_and_save_all_maps()
 
-# file_path = "roti_2024_214_-90_90_N_-180_180_E_8ed2.h5"
-# start_date = datetime.datetime(2024, 8, 1, 5, 0, 0)
-# calculator = IndexCalculator(file_path, start_date, 120) #1440
-# calculator.plot_and_save_all_maps()
+file_path = "roti_2024_214_-90_90_N_-180_180_E_8ed2.h5"
+start_date = datetime.datetime(2024, 8, 1, 0, 0, 0)
+calculator = IndexCalculator(file_path, start_date, 360) #1440
+calculator.plot_and_save_all_maps()

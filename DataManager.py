@@ -3,9 +3,10 @@ import requests
 import datetime
 from pathlib import Path
 from typing import List, Dict, Optional
-from IndexCalculator import IndexCalculator
+from IndexCalculator import IndexCalculator, FlarePosition
 from dateutil import parser as date_parser
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
 
 class DataManager:
     def __init__(self, email: str, download_folder: str = "downloaded_files"):
