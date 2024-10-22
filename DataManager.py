@@ -3,7 +3,7 @@ import requests
 import datetime
 from pathlib import Path
 from typing import List, Dict, Optional
-from IndexCalculator import IndexCalculator, FlarePosition
+from IndexCalculator import IndexCalculator
 from dateutil import parser as date_parser
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -68,6 +68,37 @@ class DataManager:
 
             # Добавляем локальный путь к элементу для дальнейшей обработки
             item['local_file_path'] = str(local_file_path)
+
+    def download_and_process_by_link(self, link: str, download_folder: str = "downloaded_files"):
+        """
+        Скачивает файл по ссылке, находит его среди запросов с указанной почты,
+        и обрабатывает с помощью IndexCalculator.
+        """
+        # Создаем объект DataManager
+        manager = DataManager(email=self.email, download_folder=download_folder)
+        
+        # Получаем все запросы по email
+        all_items = manager.checking_by_mail()
+        
+        # Находим запрос по идентификатору
+        result_id = link.split('=')[-1]  # Извлекаем ID из ссылки
+        
+        found_item = None
+        print(all_items)
+        for item in all_items:
+            if item.get('id') == result_id:
+                found_item = item
+                break
+        
+        if not found_item:
+            print(f"Запрос с ID {result_id} не найден среди запросов с почты {self.email}.")
+            return
+        
+        # Скачиваем файл
+        manager.download_file(found_item, idx=1, total=1)
+        
+        # Обрабатываем файл
+        manager.process_single_file(found_item, idx=1, total=1)
 
     def download_files(self, items: List[Dict]):
         """

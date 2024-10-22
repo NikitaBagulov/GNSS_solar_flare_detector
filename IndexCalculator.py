@@ -307,10 +307,11 @@ class IndexCalculator:
         """Рисует и сохраняет карты данных для всех временных меток с графиками индексов."""
         flare_list = self.get_flare_data()
         vmin, vmax = 0.0, 0.5  # Минимальное и максимальное значения для colorbar
-        cmap = mcolors.LinearSegmentedColormap.from_list("custom_cmap", ["blue","cyan", "yellow", "red"])
+        cmap = mcolors.LinearSegmentedColormap.from_list("custom_cmap", ["blue", "cyan", "yellow", "red"])
         folder_name = Path(f"{self.start_date.strftime('%Y%m%d')}_full")
         folder_name.mkdir(parents=True, exist_ok=True)
         flare_travel_time = datetime.timedelta(minutes=8.5)
+
         for time in self.times:
             time_key = time.replace(tzinfo=_UTC)
             if time_key not in self.data:
@@ -319,17 +320,9 @@ class IndexCalculator:
 
             # Получаем данные: lat, lon, value
             data_points = self.data[time_key]
-            
             latitudes = [point[0] for point in data_points]  # Широта
             longitudes = [point[1] for point in data_points]  # Долгота
-            values = [point[2] for point in data_points]       # Значение
-
-            times, ratios = [], []
-            for t, ratio in self.index_ratios:
-                times.append(t)
-                ratios.append(ratio)
-            
-            ratio = ratios[0]  # Берем первый найденный индекс
+            values = [point[2] for point in data_points]      # Значение
 
             # Создание общей фигуры с двумя подграфиками
             fig = plt.figure(figsize=(12, 10))
@@ -337,101 +330,77 @@ class IndexCalculator:
             gs = fig.add_gridspec(2, 1, height_ratios=[3, 1], hspace=0.4)  # Увеличен отступ до 0.6
 
             # Создаем проекцию карты для верхнего подграфика
-            ax = fig.add_subplot(gs[0], projection=ccrs.PlateCarree())
-            ax.set_extent([-180, 180, -90, 90])  # Установка диапазона
-            ax.coastlines()
-            ax.set_title(f'Data map at a point in time {time_key.strftime("%Y-%m-%d %H:%M:%S")}', fontsize=16)
-            
-            # Построение карты с цветами по значениям на верхнем subplot
-            scatter = ax.scatter(longitudes, latitudes, c=values, cmap=cmap, s=10, vmin=vmin, vmax=vmax, transform=ccrs.PlateCarree())
-            
-            # Добавление colorbar
-            cbar = plt.colorbar(scatter, ax=ax, fraction=0.046 * (ax.get_position().height / ax.get_position().width), pad=0.04)
+            ax_map = fig.add_subplot(gs[0], projection=ccrs.PlateCarree())
+            # Карта
+            ax_map.set_extent([-180, 180, -90, 90])
+            ax_map.coastlines()
+            ax_map.set_title(f'Data map at {time_key.strftime("%Y-%m-%d %H:%M:%S")}', fontsize=16)
+            scatter = ax_map.scatter(longitudes, latitudes, c=values, cmap=cmap, s=10, vmin=vmin, vmax=vmax, transform=ccrs.PlateCarree())
+            cbar = plt.colorbar(scatter, ax=ax_map, fraction=0.046 * (ax_map.get_position().height / ax_map.get_position().width), pad=0.04)
             cbar.set_label('Value')
-            self.plot_terminator(ax, time)
+            self.plot_terminator(ax_map, time)
 
-            # Построение графика индексов на нижнем subplot
+            # График индексов
+            times, ratios = zip(*self.index_ratios)
             ax_index = fig.add_subplot(gs[1])
             ax_index.plot(times, ratios, label='Индекс', color='orange', linewidth=2)
             ax_index.set_xlabel('Time', fontsize=14)
             ax_index.set_ylabel('Index', fontsize=14)
-            # ax_index.axvline(x=time_key, color='red', linestyle='--', label='Текущее время')
+            ax_index.axvline(x=time_key, color='red', linestyle='-', label='Current time')
+            ax_index.annotate(
+                        f'      Current time', xy=(time_key, max(ratios)),
+                        xytext=(time_key, max(ratios) * 1.1),
+                        arrowprops=dict(facecolor="red", shrink=0.05, width=1, headwidth=6),
+                        fontsize=10, ha='center', rotation='vertical'
+                    )
 
-
-
-            colors = list(mcolors.TABLEAU_COLORS.keys())
-            for i, flare in enumerate(flare_list):
+            # Обработка вспышек
+            for flare in flare_list:
                 flare_time = flare['start_time']
-                flare_peak_time = flare.get('peak_time')  # Время пика вспышки
-                flare_end_time = flare.get('end_time')  # Время конца вспышки
+                flare_peak_time = flare.get('peak_time')
+                flare_end_time = flare.get('end_time')
                 flare_class = flare['class']
                 flare_position = FlarePosition.classify_flare(flare['hpc_x'], flare['hpc_y'])
 
-                # flare_color = mcolors.TABLEAU_COLORS[colors[i % len(colors)]]
-                if flare_position == FlarePosition.CENTRAL:
-                    flare_color = 'Blue'
-                elif flare_position == FlarePosition.MEDIUM:
-                    flare_color = 'orange'
-                elif flare_position == FlarePosition.EDGE:
-                    flare_color = 'yellow'
-                else:
-                    flare_color = 'gray'
+                # Цвет для позиции вспышки
+                flare_color = {
+                    FlarePosition.CENTRAL: 'blue',
+                    FlarePosition.MEDIUM: 'orange',
+                    FlarePosition.EDGE: 'yellow',
+                }.get(flare_position, 'gray')
 
+                # Время начала вспышки
                 if flare_time:
-                    ax_index.axvline(x=flare_time, color=flare_color, linestyle='--', label=f'Start flare {flare_class}')
-                    flare_arrival_time = flare_time + flare_travel_time
-                    ax_index.axvline(x=flare_arrival_time, color=flare_color, linestyle='-', label=f'Peak (Earth) {flare_class}')
-                    ax_index.annotate(
-                        f'   {flare_class} (Earth)',  # Только класс вспышки у пика
-                        xy=(flare_arrival_time, max(ratios)), 
-                        xytext=(flare_arrival_time, max(ratios)), 
-                        arrowprops=dict(facecolor=flare_color, shrink=0.05), 
-                        textcoords='data',
-                        fontsize=12,
-                        ha='center',
-                        rotation='vertical'
-                    )
-
-                # Отрисовка времени пика вспышки (с аннотацией класса)
+                    ax_index.axvline(x=flare_time, color=flare_color, linestyle='--')
+                
+                # Пиковое время
                 if flare_peak_time:
-                    ax_index.axvline(x=flare_peak_time, color=flare_color, linestyle='--', label=f'Peak(Sun){flare_class}')
+                    ax_index.axvline(x=flare_peak_time, color=flare_color, linestyle='--')
                     ax_index.annotate(
-                        f'   {flare_class} (Sun)',  # Только класс вспышки у пика
-                        xy=(flare_peak_time, max(ratios)), 
-                        xytext=(flare_peak_time, max(ratios)), 
-                        arrowprops=dict(facecolor=flare_color, shrink=0.05), 
-                        textcoords='data',
-                        fontsize=12,
-                        ha='center',
-                        rotation='vertical'
+                        f'      {flare_class} (Sun)', xy=(flare_peak_time, max(ratios)),
+                        xytext=(flare_peak_time, max(ratios) * 1.1),
+                        arrowprops=dict(facecolor=flare_color, shrink=0.05, width=1, headwidth=6),
+                        fontsize=10, ha='center', rotation='vertical'
                     )
-                    
+                    # Время прибытия на Землю
+                    flare_arrival_time = flare_peak_time + flare_travel_time
+                    ax_index.axvline(x=flare_arrival_time, color=flare_color, linestyle='-')
+                    ax_index.annotate(
+                        f'      {flare_class} (Earth)', xy=(flare_arrival_time, max(ratios)),
+                        xytext=(flare_arrival_time, max(ratios) * 1.1),
+                        arrowprops=dict(facecolor=flare_color, shrink=0.05, width=1, headwidth=6),
+                        fontsize=10, ha='center', rotation='vertical'
+                    )
 
-                # Отрисовка времени конца вспышки
+                # Время окончания вспышки
                 if flare_end_time:
-                    ax_index.axvline(x=flare_end_time, color=flare_color, linestyle='--', label=f'End flare {flare_class}')
+                    ax_index.axvline(x=flare_end_time, color=flare_color, linestyle='--')
+                    ax_index.axvspan(flare_time, flare_end_time, color=flare_color, alpha=0.3)
 
-                # Выделим область вспышки цветом
-                if flare_time and flare_end_time:
-                    ax_index.axvspan(flare_time, flare_end_time, color=flare_color, alpha=0.3, label=f'Flare area {flare_class}')
-            ax_index.axvline(x=time_key, color='red', linestyle='-', label='Current time')
-            ax_index.annotate(
-                '    Current time',
-                xy=(time_key, min(ratios)), 
-                xytext=(time_key, max(ratios)), 
-                arrowprops=dict(facecolor='red', shrink=0.05),
-                textcoords='data',
-                fontsize=12,
-                ha='center',
-                rotation='vertical')   
-
-            # legend_handles.append(mlines.Line2D([0], [0], color='red', linestyle='--', label='Текущее время'))  # Добавляем в легенду
-            # ax_index.legend(handles=legend_handles, fontsize='small', loc='upper left', bbox_to_anchor=(1, 1))  # Переносим легенду вправо
             ax_index.grid()
-            # Сохранение карты и графика индексов как PNG
             filename = f"map_with_index_{time_key.strftime('%Y%m%d_%H%M%S')}.png"
-            plt.savefig(f"{time_key.strftime('%Y%m%d')}_full/{filename}", bbox_inches='tight')
-            plt.close(fig)  # Закрытие фигуры для освобождения памяти
+            plt.savefig(folder_name / filename, bbox_inches='tight')
+            plt.close(fig)
             print(f"Сохранена карта и график индексов для времени {time_key} в файл {filename}")
 
         self.create_video_from_maps()
@@ -513,7 +482,7 @@ class IndexCalculator:
 # calculator = IndexCalculator(file_path, start_date, 40)
 # calculator.plot_and_save_all_maps()
 
-file_path = "roti_2024_214_-90_90_N_-180_180_E_8ed2.h5"
-start_date = datetime.datetime(2024, 8, 1, 0, 0, 0)
-calculator = IndexCalculator(file_path, start_date, 360) #1440
-calculator.plot_and_save_all_maps()
+# file_path = "roti_2024_214_-90_90_N_-180_180_E_8ed2.h5"
+# start_date = datetime.datetime(2024, 8, 1, 0, 0, 0)
+# calculator = IndexCalculator(file_path, start_date, 360) #1440
+# calculator.plot_and_save_all_maps()
