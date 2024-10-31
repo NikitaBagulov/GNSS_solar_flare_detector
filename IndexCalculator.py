@@ -18,6 +18,7 @@ from astropy.time import Time
 from pathlib import Path
 import imageio.v3 as iio
 from enum import Enum
+from sunpy.timeseries import TimeSeries
 
 def moving_average(data, window_size=3):
     """Функция для вычисления скользящего среднего."""
@@ -54,6 +55,7 @@ class IndexCalculator:
         self.start_date = start_date.replace(tzinfo=_UTC)
         self.duration_minutes = duration_minutes
         self.times = [start_date + datetime.timedelta(minutes=i) for i in range(duration_minutes)]
+        self.end_date = self.times[-1]
         self.data = self.retrieve_data()
         self.index_ratios = self.calculate_ratios() 
 
@@ -304,14 +306,20 @@ class IndexCalculator:
         return (time, ratio)
 
     def plot_and_save_all_maps(self):
-        """Рисует и сохраняет карты данных для всех временных меток с графиками индексов."""
+        """Рисует и сохраняет карты данных для всех временных меток с графиками индексов и солнечной активности."""
         flare_list = self.get_flare_data()
         vmin, vmax = 0.0, 0.5  # Минимальное и максимальное значения для colorbar
         cmap = mcolors.LinearSegmentedColormap.from_list("custom_cmap", ["blue", "cyan", "yellow", "red"])
         folder_name = Path(f"{self.start_date.strftime('%Y%m%d')}_full")
         folder_name.mkdir(parents=True, exist_ok=True)
         flare_travel_time = datetime.timedelta(minutes=8.5)
-
+        print(self.times[0], self.times[-1])
+        # Получаем данные солнечной активности вне цикла
+        tr = a.Time(self.times[0].strftime('%Y-%m-%d %H:%M:%S'), self.times[-1].strftime('%Y-%m-%d %H:%M:%S'))
+        results = Fido.search(tr, a.Instrument.xrs & a.goes.SatelliteNumber(15) & a.Resolution("avg1m"))
+        files = Fido.fetch(results)
+        goes = TimeSeries(files)
+        
         for time in self.times:
             time_key = time.replace(tzinfo=_UTC)
             if time_key not in self.data:
@@ -324,10 +332,10 @@ class IndexCalculator:
             longitudes = [point[1] for point in data_points]  # Долгота
             values = [point[2] for point in data_points]      # Значение
 
-            # Создание общей фигуры с двумя подграфиками
-            fig = plt.figure(figsize=(12, 10))
+            # Создание общей фигуры с тремя подграфиками
+            fig = plt.figure(figsize=(10, 12))
             # Увеличиваем отступ между подграфиками
-            gs = fig.add_gridspec(2, 1, height_ratios=[3, 1], hspace=0.4)  # Увеличен отступ до 0.6
+            gs = fig.add_gridspec(3, 1, height_ratios=[4, 1, 1], hspace=0.3)
 
             # Создаем проекцию карты для верхнего подграфика
             ax_map = fig.add_subplot(gs[0], projection=ccrs.PlateCarree())
@@ -353,7 +361,27 @@ class IndexCalculator:
                         arrowprops=dict(facecolor="red", shrink=0.05, width=1, headwidth=6),
                         fontsize=10, ha='center', rotation='vertical'
                     )
+            ax_index.set_xlim(tr.start.to_datetime(), tr.end.to_datetime())
 
+            # График солнечной активности (GOES XRS)
+            ax_goes = fig.add_subplot(gs[2])
+            goes.plot(axes=ax_goes)
+            ax_goes.set_title('Solar Activity (GOES XRS)')
+            ax_goes.axvline(x=time_key, color='red', linestyle='-', label='Current time')
+            ax_goes.annotate(text="      Current time",xy=(time_key, max(ratios)),
+                        xytext=(time_key, max(ratios) * 1.1),
+                        arrowprops=dict(facecolor="red", shrink=0.05, width=1, headwidth=6),
+                        fontsize=10, ha='center', rotation='vertical'
+                    )
+            ax_goes.set_xlim(tr.start.to_datetime(), tr.end.to_datetime())
+            ax_goes.set_yscale('log')
+            flare_levels = [1e-2, 1e-3, 1e-4, 1e-5, 1e-6, 1e-7, 1e-8, 1e-9, 1e-10]
+            for level in flare_levels:
+                ax_goes.axhline(y=level, color='gray', linestyle='--', linewidth=0.5)
+            ax_goes.set_yticks(flare_levels)
+            ax_goes.get_yaxis().set_major_formatter(plt.LogFormatter(base=10))
+            
+        
             # Обработка вспышек
             for flare in flare_list:
                 flare_time = flare['start_time']
@@ -398,10 +426,12 @@ class IndexCalculator:
                     ax_index.axvspan(flare_time, flare_end_time, color=flare_color, alpha=0.3)
 
             ax_index.grid()
-            filename = f"map_with_index_{time_key.strftime('%Y%m%d_%H%M%S')}.png"
+            ax_goes.grid()
+
+            filename = f"map_with_index_and_goes_{time_key.strftime('%Y%m%d_%H%M%S')}.png"
             plt.savefig(folder_name / filename, bbox_inches='tight')
             plt.close(fig)
-            print(f"Сохранена карта и график индексов для времени {time_key} в файл {filename}")
+            print(f"Сохранена карта и графики для времени {time_key} в файл {filename}")
 
         self.create_video_from_maps()
 
