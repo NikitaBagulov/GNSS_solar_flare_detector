@@ -19,35 +19,12 @@ from pathlib import Path
 import imageio.v3 as iio
 from enum import Enum
 from sunpy.timeseries import TimeSeries
+import time as tm
 
-def moving_average(data, window_size=3):
-    """Функция для вычисления скользящего среднего."""
-    return np.convolve(data, np.ones(window_size) / window_size, mode='valid')
-
-RE_meters = 6371000
-
-TIME_FORMAT = '%Y-%m-%d %H:%M:%S.%f'
-_UTC = tz.gettz('UTC')
-DAYS = 365.25
-TILT = 23.44
-MAG1 = 9
-LON_DEGREES_HOUR = 15.
-
-class FlarePosition(Enum):
-    CENTRAL = "Центральная"
-    MEDIUM = "Средняя"
-    EDGE = "Крайняя"
-    INVISIBLE = "Невидимая"
-
-    def classify_flare(hpc_x, hpc_y):
-        if -300 <= hpc_x <= 300 and -300 <= hpc_y <= 300:
-            return FlarePosition.CENTRAL
-        elif -600 <= hpc_x <= 600 and -600 <= hpc_y <= 600:
-            return FlarePosition.MEDIUM
-        elif -960 <= hpc_x <= 960 and -960 <= hpc_y <= 960:
-            return FlarePosition.EDGE
-        else:
-            return FlarePosition.INVISIBLE
+from utils import get_latlon, retrieve_data, RE_meters, _UTC, TIME_FORMAT
+import json
+import subprocess
+import pickle
 
 class IndexCalculator:
     def __init__(self, file: str, start_date: datetime.datetime, duration_minutes: int = 60):
@@ -56,7 +33,7 @@ class IndexCalculator:
         self.duration_minutes = duration_minutes
         self.times = [start_date + datetime.timedelta(minutes=i) for i in range(duration_minutes)]
         self.end_date = self.times[-1]
-        self.data = self.retrieve_data()
+        self.data = retrieve_data(self.file)
         self.index_ratios = self.calculate_ratios() 
 
     def get_flare_data(self):
@@ -128,16 +105,6 @@ class IndexCalculator:
                                 'hpc_y': hpc_y,
                             })
         return flare_list
-
-
-    @staticmethod
-    def get_latlon(time):
-        delta = time - datetime.datetime(time.year, 1, 1, 0, 0, 0)
-        doy = delta.days
-        ut_hour = time.hour + time.minute / 60. + time.second / (60. * 24.)
-        lat = - TILT * math.cos(2 * math.pi * ((doy + MAG1)) / DAYS)
-        lon = (12.0 - ut_hour) * LON_DEGREES_HOUR
-        return lat, lon
     
     @staticmethod
     def great_circle_distance(late, lone, latp, lonp, R=RE_meters):
@@ -202,24 +169,11 @@ class IndexCalculator:
 
         return R * math.acos(cosgamma)
     def is_daytime(self, lat, lon, time):
-        late, lone = self.get_latlon(time)
+        late, lone = get_latlon(time)
         # print(late, lone)
         dist = self.great_circle_distance_rad(late, lone, lat, lon)
         # print(dist)
         return dist < (math.pi / 2 * RE_meters)
-
-    def retrieve_data(self) -> dict[datetime.datetime, NDArray]:
-        f_in = h5py.File(self.file, 'r')
-        data = {}
-        times = list(f_in['data'])[:]
-        
-        with tqdm(total=len(times), desc="Загрузка данных из файла") as progress:
-            for str_time in times:
-                time = datetime.datetime.strptime(str_time, TIME_FORMAT).replace(tzinfo=tz.gettz('UTC'))
-                data[time] = f_in['data'][str_time][:]
-                progress.update(1)
-
-        return data
 
     def calculate_index(self, points, is_day=True):
         """
@@ -277,7 +231,7 @@ class IndexCalculator:
         latitudes = np.array([point[0] for point in points])
         longitudes = np.array([point[1] for point in points])
 
-        late, lone = self.get_latlon(time)
+        late, lone = get_latlon(time)
 
         late_array = np.full(latitudes.shape, late)
         lone_array = np.full(latitudes.shape, lone)
@@ -297,7 +251,7 @@ class IndexCalculator:
 
         total_index_day = self.calculate_index(days)
         total_index_night = self.calculate_index(nights, is_day=False)
-
+        ratio = 0
         if total_index_night != 0 or count != 0:
             weighted_day = total_index_day / len(days) if len(days) > 0 else 0
             weighted_night = total_index_night / len(nights) if len(nights) > 0 else 0
@@ -306,134 +260,80 @@ class IndexCalculator:
         return (time, ratio)
 
     def plot_and_save_all_maps(self):
-        """Рисует и сохраняет карты данных для всех временных меток с графиками индексов и солнечной активности."""
-        flare_list = self.get_flare_data()
-        vmin, vmax = 0.0, 0.5  # Минимальное и максимальное значения для colorbar
-        cmap = mcolors.LinearSegmentedColormap.from_list("custom_cmap", ["blue", "cyan", "yellow", "red"])
-        folder_name = Path(f"{self.start_date.strftime('%Y%m%d')}_full")
-        folder_name.mkdir(parents=True, exist_ok=True)
-        flare_travel_time = datetime.timedelta(minutes=8.5)
-        print(self.times[0], self.times[-1])
-        # Получаем данные солнечной активности вне цикла
         tr = a.Time(self.times[0].strftime('%Y-%m-%d %H:%M:%S'), self.times[-1].strftime('%Y-%m-%d %H:%M:%S'))
         results = Fido.search(tr, a.Instrument.xrs & a.goes.SatelliteNumber(15) & a.Resolution("avg1m"))
         files = Fido.fetch(results)
         goes = TimeSeries(files)
-        
-        for time in self.times:
-            time_key = time.replace(tzinfo=_UTC)
-            if time_key not in self.data:
-                print(f"Нет данных для времени: {time}")
-                continue
+        folder_name = Path(f"{self.start_date.strftime('%Y%m%d')}_full")
+        folder_name.mkdir(parents=True, exist_ok=True)
 
-            # Получаем данные: lat, lon, value
-            data_points = self.data[time_key]
-            latitudes = [point[0] for point in data_points]  # Широта
-            longitudes = [point[1] for point in data_points]  # Долгота
-            values = [point[2] for point in data_points]      # Значение
+        index_ratios_file = folder_name / "index_ratios.pickle"
+        with open(index_ratios_file, 'wb') as f:
+            pickle.dump(self.index_ratios, f)
 
-            # Создание общей фигуры с тремя подграфиками
-            fig = plt.figure(figsize=(10, 12))
-            # Увеличиваем отступ между подграфиками
-            gs = fig.add_gridspec(3, 1, height_ratios=[4, 1, 1], hspace=0.3)
+        flare_data_file = folder_name / "flare_data.pickle"
+        with open(flare_data_file, 'wb') as f:
+            pickle.dump(self.get_flare_data(), f)
 
-            # Создаем проекцию карты для верхнего подграфика
-            ax_map = fig.add_subplot(gs[0], projection=ccrs.PlateCarree())
-            # Карта
-            ax_map.set_extent([-180, 180, -90, 90])
-            ax_map.coastlines()
-            ax_map.set_title(f'Data map at {time_key.strftime("%Y-%m-%d %H:%M:%S")}', fontsize=16)
-            scatter = ax_map.scatter(longitudes, latitudes, c=values, cmap=cmap, s=10, vmin=vmin, vmax=vmax, transform=ccrs.PlateCarree())
-            cbar = plt.colorbar(scatter, ax=ax_map, fraction=0.046 * (ax_map.get_position().height / ax_map.get_position().width), pad=0.04)
-            cbar.set_label('Value')
-            self.plot_terminator(ax_map, time)
+        goes_file = folder_name / "goes_data.pickle"
+        with open(goes_file, 'wb') as f:
+            pickle.dump(goes, f)
 
-            # График индексов
-            times, ratios = zip(*self.index_ratios)
-            ax_index = fig.add_subplot(gs[1])
-            ax_index.plot(times, ratios, label='Индекс', color='orange', linewidth=2)
-            ax_index.set_xlabel('Time', fontsize=14)
-            ax_index.set_ylabel('Index', fontsize=14)
-            ax_index.axvline(x=time_key, color='red', linestyle='-', label='Current time')
-            ax_index.annotate(
-                        f'      Current time', xy=(time_key, max(ratios)),
-                        xytext=(time_key, max(ratios) * 1.1),
-                        arrowprops=dict(facecolor="red", shrink=0.05, width=1, headwidth=6),
-                        fontsize=10, ha='center', rotation='vertical'
-                    )
-            ax_index.set_xlim(tr.start.to_datetime(), tr.end.to_datetime())
+        tr_file = folder_name / "tr.pickle"
+        with open(tr_file, 'wb') as f:
+            pickle.dump(tr, f)
 
-            # График солнечной активности (GOES XRS)
-            ax_goes = fig.add_subplot(gs[2])
-            goes.plot(axes=ax_goes)
-            ax_goes.set_title('Solar Activity (GOES XRS)')
-            ax_goes.axvline(x=time_key, color='red', linestyle='-', label='Current time')
-            ax_goes.annotate(text="      Current time",xy=(time_key, max(ratios)),
-                        xytext=(time_key, max(ratios) * 1.1),
-                        arrowprops=dict(facecolor="red", shrink=0.05, width=1, headwidth=6),
-                        fontsize=10, ha='center', rotation='vertical'
-                    )
-            ax_goes.set_xlim(tr.start.to_datetime(), tr.end.to_datetime())
-            ax_goes.set_yscale('log')
-            flare_levels = [1e-2, 1e-3, 1e-4, 1e-5, 1e-6, 1e-7, 1e-8, 1e-9, 1e-10]
-            for level in flare_levels:
-                ax_goes.axhline(y=level, color='gray', linestyle='--', linewidth=0.5)
-            ax_goes.set_yticks(flare_levels)
-            ax_goes.get_yaxis().set_major_formatter(plt.LogFormatter(base=10))
-            
-        
-            # Обработка вспышек
-            for flare in flare_list:
-                flare_time = flare['start_time']
-                flare_peak_time = flare.get('peak_time')
-                flare_end_time = flare.get('end_time')
-                flare_class = flare['class']
-                flare_position = FlarePosition.classify_flare(flare['hpc_x'], flare['hpc_y'])
+        processes = []
+        total_files = len(self.times)
+        max_processes = 5  # Максимальное количество одновременно запущенных процессов
 
-                # Цвет для позиции вспышки
-                flare_color = {
-                    FlarePosition.CENTRAL: 'blue',
-                    FlarePosition.MEDIUM: 'orange',
-                    FlarePosition.EDGE: 'yellow',
-                }.get(flare_position, 'gray')
+        with tqdm(total=total_files, desc="Прогресс обработки карт") as pbar:
+            for i, time in enumerate(self.times, start=1):
+                time_key = time.replace(tzinfo=_UTC)
+                if time_key not in self.data:
+                    print(f"Нет данных для времени: {time}")
+                    continue
 
-                # Время начала вспышки
-                if flare_time:
-                    ax_index.axvline(x=flare_time, color=flare_color, linestyle='--')
-                
-                # Пиковое время
-                if flare_peak_time:
-                    ax_index.axvline(x=flare_peak_time, color=flare_color, linestyle='--')
-                    ax_index.annotate(
-                        f'      {flare_class} (Sun)', xy=(flare_peak_time, max(ratios)),
-                        xytext=(flare_peak_time, max(ratios) * 1.1),
-                        arrowprops=dict(facecolor=flare_color, shrink=0.05, width=1, headwidth=6),
-                        fontsize=10, ha='center', rotation='vertical'
-                    )
-                    # Время прибытия на Землю
-                    flare_arrival_time = flare_peak_time + flare_travel_time
-                    ax_index.axvline(x=flare_arrival_time, color=flare_color, linestyle='-')
-                    ax_index.annotate(
-                        f'      {flare_class} (Earth)', xy=(flare_arrival_time, max(ratios)),
-                        xytext=(flare_arrival_time, max(ratios) * 1.1),
-                        arrowprops=dict(facecolor=flare_color, shrink=0.05, width=1, headwidth=6),
-                        fontsize=10, ha='center', rotation='vertical'
-                    )
+                output_file = folder_name / f"map_with_index_and_goes_{time_key.strftime('%Y%m%d_%H%M%S')}.png"
 
-                # Время окончания вспышки
-                if flare_end_time:
-                    ax_index.axvline(x=flare_end_time, color=flare_color, linestyle='--')
-                    ax_index.axvspan(flare_time, flare_end_time, color=flare_color, alpha=0.3)
+                # Запуск процесса
+                while len(processes) >= max_processes:
+                    # Проверяем завершение процессов
+                    for process, index in processes:
+                        if process.poll() is not None:  # Проверка завершения
+                            pbar.update(1)  # Обновление прогресс-бара
+                            processes.remove((process, index))
+                            break  # Прерываем цикл для повторной проверки
 
-            ax_index.grid()
-            ax_goes.grid()
+                    # Добавляем небольшой таймер, чтобы не перегружать процессор
+                    tm.sleep(0.5)
 
-            filename = f"map_with_index_and_goes_{time_key.strftime('%Y%m%d_%H%M%S')}.png"
-            plt.savefig(folder_name / filename, bbox_inches='tight')
-            plt.close(fig)
-            print(f"Сохранена карта и графики для времени {time_key} в файл {filename}")
+                process = subprocess.Popen([
+                    "python", "plot_single_map.py",
+                    str(self.file),
+                    str(output_file),
+                    time.isoformat(),
+                    str(index_ratios_file),
+                    str(flare_data_file),
+                    str(goes_file), 
+                    str(tr_file)
+                ])
+                processes.append((process, i))
 
-        self.create_video_from_maps()
+            # Ожидаем завершения оставшихся процессов
+            while processes:
+                for process, index in processes:
+                    if process.poll() is not None:  # Проверка завершения
+                        pbar.update(1)  # Обновление прогресс-бара
+                        processes.remove((process, index))
+                        break  # Прерываем цикл для повторной проверки
+
+                # Добавляем небольшой таймер, чтобы не перегружать процессор
+                tm.sleep(0.5)
+
+        # Все процессы завершены, создаем видео
+        self.create_video_from_maps(output_filename="animation.mp4")
+        print("Все процессы завершены, видео создано.")
 
     def create_video_from_maps(self, output_filename="animation.mp4"):
         """Создает видео-анимацию из сохраненных изображений карт."""
@@ -471,35 +371,6 @@ class IndexCalculator:
             image = image[..., :3]  # Убираем альфа-канал
 
         return image
-
-    def plot_terminator(self, ax, time=None, color="black", alpha=0.5):
-        """
-        Plot a fill on the dark side of the planet (without refraction).
-
-        Parameters
-        ----------
-            ax: axes of matplotlib.plt
-                of matplotlib.plt to plot on
-            time : datetime
-                The time to calculate terminator for. Defaults to datetime.utcnow()
-        """
-        lat, lon = self.get_latlon(time)
-        pole_lng = lon
-        if lat > 0:
-            pole_lat = -90 + lat
-            central_rot_lng = 180
-        else:
-            pole_lat = 90 + lat
-            central_rot_lng = 0
-
-        rotated_pole = ccrs.RotatedPole(pole_latitude=pole_lat,
-                                        pole_longitude=pole_lng,
-                                        central_rotated_longitude=central_rot_lng)
-
-        x = [-90] * 181 + [90] * 181 + [-90]
-        y = list(range(-90, 91)) + list(range(90, -91, -1)) + [-90]
-        ax.fill(x, y, transform=rotated_pole,
-                color=color, alpha=alpha, zorder=3)
 
 
 # file_path = "roti_2011_249_-90_90_N_-180_180_E_9caa.h5"
