@@ -1,14 +1,23 @@
 import sys
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import matplotlib.colors as mcolors
-import json
+from astropy.time import Time
 from pathlib import Path
 import datetime
 from utils import get_latlon, retrieve_data, _UTC
 from enum import Enum
 from sunpy.net import attrs as a
+import sunpy.map
+import sunpy.data.sample
+from astropy.coordinates import SkyCoord
+import astropy.units as u
 import pickle
+import numpy as np
+from IndexCalculator import IndexCalculator
+
 
 class FlarePosition(Enum):
     CENTRAL = "central"
@@ -38,7 +47,6 @@ def plot_terminator(ax, time=None, color="black", alpha=0.5):
                 The time to calculate terminator for. Defaults to datetime.utcnow()
         """
         lat, lon = get_latlon(time)
-        print("Success lat lon", lat, lon)
         pole_lng = lon
         if lat > 0:
             pole_lat = -90 + lat
@@ -72,16 +80,16 @@ def plot_single_map(filename, output_file, time_key_str, index_ratios_file, flar
     with open(tr_file, 'rb') as f:
         tr = pickle.load(f)
 
-    # Парсинг времени
+
     time_key = datetime.datetime.fromisoformat(time_key_str)
     data_points = retrieve_data(filename)[time_key.replace(tzinfo=_UTC)]
-    # Построение графиков
+
     vmin, vmax = 0.0, 0.5
     cmap = mcolors.LinearSegmentedColormap.from_list("custom_cmap", ["blue", "cyan", "yellow", "red"])
     flare_travel_time = datetime.timedelta(minutes=8.5)
-    fig = plt.figure(figsize=(10, 12))
-    gs = fig.add_gridspec(3, 1, height_ratios=[4, 1, 1], hspace=0.3)
-    ax_map = fig.add_subplot(gs[0], projection=ccrs.PlateCarree())
+    fig = plt.figure(figsize=(16, 12))
+    gs = fig.add_gridspec(3, 2, height_ratios=[4, 1, 1], width_ratios=[2, 1],hspace=0.3, wspace=0.4)
+    ax_map = fig.add_subplot(gs[0, 0], projection=ccrs.PlateCarree())
     ax_map.set_extent([-180, 180, -90, 90])
     ax_map.coastlines()
     ax_map.set_title(f'Data map at {time_key.strftime("%Y-%m-%d %H:%M:%S")}', fontsize=16)
@@ -98,7 +106,7 @@ def plot_single_map(filename, output_file, time_key_str, index_ratios_file, flar
 
             # График индексов
     times, ratios = zip(*index_ratios)
-    ax_index = fig.add_subplot(gs[1])
+    ax_index = fig.add_subplot(gs[1, 0])
     ax_index.plot(times, ratios, label='Индекс', color='orange', linewidth=2)
     ax_index.set_xlabel('Time', fontsize=14)
     ax_index.set_ylabel('Index', fontsize=14)
@@ -112,7 +120,7 @@ def plot_single_map(filename, output_file, time_key_str, index_ratios_file, flar
     ax_index.set_xlim(tr.start.to_datetime(), tr.end.to_datetime())
 
             # График солнечной активности (GOES XRS)
-    ax_goes = fig.add_subplot(gs[2])
+    ax_goes = fig.add_subplot(gs[2, 0])
     goes.plot(axes=ax_goes)
     ax_goes.set_title('Solar Activity (GOES XRS)')
     ax_goes.axvline(x=time_key, color='red', linestyle='-', label='Current time')
@@ -176,7 +184,72 @@ def plot_single_map(filename, output_file, time_key_str, index_ratios_file, flar
     ax_index.grid()
     ax_goes.grid()
 
+    
+
+)
+    sun_map = sunpy.map.Map(sunpy.data.sample.AIA_171_IMAGE)
+    wcs = sun_map.wcs
+    ax_sun = fig.add_subplot(gs[0, 1], projection=wcs)
+    sun_map.plot(axes=ax_sun)
+    sun_map.draw_limb()
+    for flare in flare_list:
+        flare_lat = flare['hpc_y']
+        flare_lon = flare['hpc_x']
+        coord = SkyCoord(flare_lon*u.arcsec, flare_lat*u.arcsec, frame=sun_map.coordinate_frame)
+        ax_sun.plot_coord(coord, 'o-')
+    
+    
+
+    ax_sun.set_title('Sun with Flare Positions')
+    # ax_sun.set_theta_zero_location('S')  # Опционально: выставить направление "юг" для наглядности
+    ax_sun.grid()
     # Сохраняем результат
+
+    roti_values_day = [point[2] for point in data_points if IndexCalculator.is_daytime(point[0], point[1], time_key) and not np.isnan(point[2])]
+    roti_values_night = [point[2] for point in data_points if not IndexCalculator.is_daytime(point[0], point[1], time_key) and not np.isnan(point[2])]
+
+    # Убедимся, что у нас есть данные для построения гистограммы
+    if roti_values_day or roti_values_night:
+        # Задаем интервалы для гистограммы
+        roti_bins = np.histogram_bin_edges(roti_values_day + roti_values_night, bins=20)  # Объединяем оба списка, чтобы интервалы были одинаковыми
+
+        # Вычисляем частоту значений ROTI для дневных и ночных точек
+        roti_counts_day, _ = np.histogram(roti_values_day, bins=roti_bins)
+        roti_counts_night, _ = np.histogram(roti_values_night, bins=roti_bins)
+
+        # Создание графика
+        ax_roti = fig.add_subplot(gs[1, 1])
+        width = np.diff(roti_bins)  # Ширина каждого интервала
+
+        # Отображаем гистограммы для дневных и ночных значений
+        
+        ax_roti.bar(roti_bins[:-1], roti_counts_night, width=width, color='blue', align='edge', label='Nighttime', alpha=0.7)
+        ax_roti.bar(roti_bins[:-1], roti_counts_day, width=width, color='orange', align='edge', label='Daytime')
+
+        # Настройка осей и заголовков
+        ax_roti.set_xlabel('Index ROTI', fontsize=14)
+        ax_roti.set_ylabel('Frequency', fontsize=14)
+        ax_roti.set_title('Distribution of Index ROTI (Daytime vs Nighttime)', fontsize=16)
+        ax_roti.legend()
+    else:
+        print("Нет данных для построения графика.")
+
+    subsolat_lat, subsolat_lon = get_latlon(time_key)  # Получение подсолнечной точки на текущий момент
+    distances = [
+        IndexCalculator.great_circle_distance_rad(subsolat_lat, subsolat_lon, lat, lon) 
+        for lat, lon, _ in data_points
+    ]
+
+    # Определение дневных и ночных точек
+    day_points = [dist for dist, point in zip(distances, data_points) if IndexCalculator.is_daytime(point[0], point[1], time_key)]
+    night_points = [dist for dist, point in zip(distances, data_points) if not IndexCalculator.is_daytime(point[0], point[1], time_key)]
+    ax_distance = fig.add_subplot(gs[2, 1])
+    ax_distance.hist(day_points, bins=20, alpha=0.7, label='Day', color='gold')
+    ax_distance.hist(night_points, bins=20, alpha=0.7, label='Night', color='navy')
+    ax_distance.set_xlabel('Distance from Subsolar Point', fontsize=14)
+    ax_distance.set_ylabel('Frequency', fontsize=14)
+    ax_distance.set_title('Distance Distribution: Day vs Night', fontsize=16)
+    ax_distance.legend()
     plt.savefig(output_file, bbox_inches='tight')
     plt.close(fig)
 

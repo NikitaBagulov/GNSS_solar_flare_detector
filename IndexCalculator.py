@@ -21,6 +21,7 @@ from enum import Enum
 from sunpy.timeseries import TimeSeries
 import time as tm
 
+
 from utils import get_latlon, retrieve_data, RE_meters, _UTC, TIME_FORMAT
 import json
 import subprocess
@@ -168,10 +169,11 @@ class IndexCalculator:
         cosgamma = min(1, max(-1, cosgamma))
 
         return R * math.acos(cosgamma)
-    def is_daytime(self, lat, lon, time):
+    @staticmethod
+    def is_daytime(lat, lon, time):
         late, lone = get_latlon(time)
         # print(late, lone)
-        dist = self.great_circle_distance_rad(late, lone, lat, lon)
+        dist = IndexCalculator.great_circle_distance_rad(late, lone, lat, lon)
         # print(dist)
         return dist < (math.pi / 2 * RE_meters)
 
@@ -264,6 +266,8 @@ class IndexCalculator:
         results = Fido.search(tr, a.Instrument.xrs & a.goes.SatelliteNumber(15) & a.Resolution("avg1m"))
         files = Fido.fetch(results)
         goes = TimeSeries(files)
+        if isinstance(goes, list):
+            goes = goes[0]
         folder_name = Path(f"{self.start_date.strftime('%Y%m%d')}_full")
         folder_name.mkdir(parents=True, exist_ok=True)
 
@@ -282,7 +286,6 @@ class IndexCalculator:
         tr_file = folder_name / "tr.pickle"
         with open(tr_file, 'wb') as f:
             pickle.dump(tr, f)
-
         processes = []
         total_files = len(self.times)
         max_processes = 5  # Максимальное количество одновременно запущенных процессов
