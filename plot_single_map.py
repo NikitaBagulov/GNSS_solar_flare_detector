@@ -183,10 +183,9 @@ def plot_single_map(filename, output_file, time_key_str, index_ratios_file, flar
     ax_map.grid()
     ax_index.grid()
     ax_goes.grid()
-
+  
     
 
-)
     sun_map = sunpy.map.Map(sunpy.data.sample.AIA_171_IMAGE)
     wcs = sun_map.wcs
     ax_sun = fig.add_subplot(gs[0, 1], projection=wcs)
@@ -211,7 +210,7 @@ def plot_single_map(filename, output_file, time_key_str, index_ratios_file, flar
     # Убедимся, что у нас есть данные для построения гистограммы
     if roti_values_day or roti_values_night:
         # Задаем интервалы для гистограммы
-        roti_bins = np.histogram_bin_edges(roti_values_day + roti_values_night, bins=20)  # Объединяем оба списка, чтобы интервалы были одинаковыми
+        roti_bins = np.histogram_bin_edges(roti_values_day + roti_values_night, bins=100)  # Объединяем оба списка, чтобы интервалы были одинаковыми
 
         # Вычисляем частоту значений ROTI для дневных и ночных точек
         roti_counts_day, _ = np.histogram(roti_values_day, bins=roti_bins)
@@ -222,15 +221,16 @@ def plot_single_map(filename, output_file, time_key_str, index_ratios_file, flar
         width = np.diff(roti_bins)  # Ширина каждого интервала
 
         # Отображаем гистограммы для дневных и ночных значений
-        
         ax_roti.bar(roti_bins[:-1], roti_counts_night, width=width, color='blue', align='edge', label='Nighttime', alpha=0.7)
-        ax_roti.bar(roti_bins[:-1], roti_counts_day, width=width, color='orange', align='edge', label='Daytime')
+        ax_roti.bar(roti_bins[:-1], roti_counts_day, width=width, bottom=roti_counts_night, color='orange', align='edge', label='Daytime')
 
         # Настройка осей и заголовков
         ax_roti.set_xlabel('Index ROTI', fontsize=14)
+        ax_roti.set_xlim(0, 0.5)
         ax_roti.set_ylabel('Frequency', fontsize=14)
         ax_roti.set_title('Distribution of Index ROTI (Daytime vs Nighttime)', fontsize=16)
         ax_roti.legend()
+
     else:
         print("Нет данных для построения графика.")
 
