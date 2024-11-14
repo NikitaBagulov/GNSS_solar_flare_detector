@@ -1,7 +1,7 @@
 import h5py
 import numpy as np
-import matplotlib
-matplotlib.use('Agg')
+# import matplotlib
+# matplotlib.use('Agg')
 from numpy.typing import NDArray
 import datetime
 import math
@@ -21,6 +21,15 @@ from enum import Enum
 from sunpy.timeseries import TimeSeries
 import time as tm
 
+
+
+import sunpy.map
+import sunpy.data.sample
+from astropy.coordinates import SkyCoord
+import astropy.units as u
+
+from astropy.visualization import ImageNormalize, SqrtStretch
+# from sunpy.visualization.imageanimator import ImageAnimator
 
 from utils import get_latlon, retrieve_data, RE_meters, _UTC, TIME_FORMAT
 import json
@@ -189,9 +198,13 @@ class IndexCalculator:
         d = np.array([p[0] for p in points])
         values = np.array([p[1] for p in points])
         if is_day:
-            I = (1-1/(2*math.pi*RE_meters/4)*d) * values
+            # I = (1-1/(2*math.pi*RE_meters/4)*d) * values
+            weights = np.maximum(0, 1 - d / (2 * np.pi * RE_meters / 4))
+            I = weights * values
         else:
-            I=values
+            I=values * np.mean( np.maximum(0, 1 - d / (2 * np.pi * RE_meters / 4)))
+            # I=values * np.mean( (1 - d / (2 * np.pi * RE_meters / 4)))
+            # I=values
         I = np.round(I, 10)
         I = np.nan_to_num(I, nan=0.0)
         return np.sum(I)
@@ -267,7 +280,7 @@ class IndexCalculator:
         files = Fido.fetch(results)
         goes = TimeSeries(files)
         if isinstance(goes, list):
-            goes = goes[0]
+            goes = goes[0] if len(goes) > 0 else []
         folder_name = Path(f"{self.start_date.strftime('%Y%m%d')}_full")
         folder_name.mkdir(parents=True, exist_ok=True)
 
@@ -276,8 +289,9 @@ class IndexCalculator:
             pickle.dump(self.index_ratios, f)
 
         flare_data_file = folder_name / "flare_data.pickle"
+        flare_data = self.get_flare_data()
         with open(flare_data_file, 'wb') as f:
-            pickle.dump(self.get_flare_data(), f)
+            pickle.dump(flare_data, f)
 
         goes_file = folder_name / "goes_data.pickle"
         with open(goes_file, 'wb') as f:
@@ -286,9 +300,49 @@ class IndexCalculator:
         tr_file = folder_name / "tr.pickle"
         with open(tr_file, 'wb') as f:
             pickle.dump(tr, f)
+
+        flare_x = [flare['hpc_x'] * u.arcsec for flare in flare_data]
+        flare_y = [flare['hpc_y'] * u.arcsec for flare in flare_data]
+
+        min_x = min(flare_x)
+        max_x = max(flare_x)
+        min_y = min(flare_y)
+        max_y = max(flare_y)
+
+        buffer = 100 * u.arcsec
+        min_x -= buffer
+        max_x += buffer
+        min_y -= buffer
+        max_y += buffer
+
+        bottom_left = SkyCoord(min_x, min_y, obstime=self.start_date.strftime('%Y-%m-%dT%H:%M:%S'), observer="earth", frame="helioprojective")
+        top_right = SkyCoord(max_x, max_y, obstime=self.start_date.strftime('%Y-%m-%dT%H:%M:%S'), observer="earth", frame="helioprojective")
+
+        cutout = a.jsoc.Cutout(bottom_left, top_right=top_right, tracking=True)
+
+        query = Fido.search(
+            a.Time(self.times[0].strftime('%Y-%m-%dT%H:%M:%S'), self.times[-1].strftime('%Y-%m-%dT%H:%M:%S')),
+            a.Wavelength(171*u.angstrom),
+            a.Sample(1*u.min),
+            a.jsoc.Series.aia_lev1_euv_12s,   
+            a.jsoc.Segment.image,
+            a.jsoc.Notify('nikita.bagulov.arshan@gmail.com'),
+            # cutout
+        )
+        files = Fido.fetch(query)
+        print(files)
+        files.sort()
+        print(len(self.times), len(files))
+        maps_sun = {key.strftime('%Y-%m-%dT%H:%M:%S'): value for key, value in zip(self.times, files)}
+        print(maps_sun.keys())
+
+        maps_sun_file = folder_name / "maps_sun.pickle"
+        with open(maps_sun_file, 'wb') as f:
+            pickle.dump(maps_sun, f)
+
         processes = []
         total_files = len(self.times)
-        max_processes = 5  # Максимальное количество одновременно запущенных процессов
+        max_processes = 5 
 
         with tqdm(total=total_files, desc="Прогресс обработки карт") as pbar:
             for i, time in enumerate(self.times, start=1):
@@ -319,7 +373,8 @@ class IndexCalculator:
                     str(index_ratios_file),
                     str(flare_data_file),
                     str(goes_file), 
-                    str(tr_file)
+                    str(tr_file), 
+                    str(maps_sun_file)
                 ])
                 processes.append((process, i))
 

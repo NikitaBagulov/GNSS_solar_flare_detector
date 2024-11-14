@@ -17,6 +17,7 @@ import astropy.units as u
 import pickle
 import numpy as np
 from IndexCalculator import IndexCalculator
+from sunpy.net import Fido
 
 
 class FlarePosition(Enum):
@@ -64,7 +65,7 @@ def plot_terminator(ax, time=None, color="black", alpha=0.5):
         ax.fill(x, y, transform=rotated_pole,
                 color=color, alpha=alpha, zorder=3)
 
-def plot_single_map(filename, output_file, time_key_str, index_ratios_file, flare_data_file, goes_file, tr_file):
+def plot_single_map(filename, output_file, time_key_str, index_ratios_file, flare_data_file, goes_file, tr_file, maps_sun_file):
     
     
 
@@ -80,7 +81,9 @@ def plot_single_map(filename, output_file, time_key_str, index_ratios_file, flar
     with open(tr_file, 'rb') as f:
         tr = pickle.load(f)
 
-
+    with open(maps_sun_file, 'rb') as f:
+        maps_sun = pickle.load(f)
+    print(maps_sun.values())
     time_key = datetime.datetime.fromisoformat(time_key_str)
     data_points = retrieve_data(filename)[time_key.replace(tzinfo=_UTC)]
 
@@ -119,9 +122,10 @@ def plot_single_map(filename, output_file, time_key_str, index_ratios_file, flar
                     )
     ax_index.set_xlim(tr.start.to_datetime(), tr.end.to_datetime())
 
-            # График солнечной активности (GOES XRS)
     ax_goes = fig.add_subplot(gs[2, 0])
-    goes.plot(axes=ax_goes)
+    if isinstance(goes, list):
+        if len(goes) > 0:
+            goes.plot(axes=ax_goes)
     ax_goes.set_title('Solar Activity (GOES XRS)')
     ax_goes.axvline(x=time_key, color='red', linestyle='-', label='Current time')
     ax_goes.annotate(text="      Current time",xy=(time_key, max(ratios)),
@@ -186,7 +190,11 @@ def plot_single_map(filename, output_file, time_key_str, index_ratios_file, flar
   
     
 
-    sun_map = sunpy.map.Map(sunpy.data.sample.AIA_171_IMAGE)
+    # files = Fido.fetch(maps_sun[time_key_str])
+    if time_key_str in maps_sun:
+        sun_map = sunpy.map.Map(maps_sun[time_key_str])
+    else:
+        sun_map = sunpy.map.Map(sunpy.data.sample.AIA_171_IMAGE)
     wcs = sun_map.wcs
     ax_sun = fig.add_subplot(gs[0, 1], projection=wcs)
     sun_map.plot(axes=ax_sun)
@@ -195,8 +203,9 @@ def plot_single_map(filename, output_file, time_key_str, index_ratios_file, flar
         flare_lat = flare['hpc_y']
         flare_lon = flare['hpc_x']
         coord = SkyCoord(flare_lon*u.arcsec, flare_lat*u.arcsec, frame=sun_map.coordinate_frame)
-        ax_sun.plot_coord(coord, 'o-')
-    
+        ax_sun.plot_coord(coord, 'o-', markersize=5, label=f'{flare["class"]}')
+        ax_sun.legend()
+
     
 
     ax_sun.set_title('Sun with Flare Positions')
@@ -228,7 +237,7 @@ def plot_single_map(filename, output_file, time_key_str, index_ratios_file, flar
         ax_roti.set_xlabel('Index ROTI', fontsize=14)
         ax_roti.set_xlim(0, 0.5)
         ax_roti.set_ylabel('Frequency', fontsize=14)
-        ax_roti.set_title('Distribution of Index ROTI (Daytime vs Nighttime)', fontsize=16)
+        ax_roti.set_title(f'Distribution of Index ROTI (Daytime vs Nighttime). Total points: {len(roti_values_day) + len(roti_values_night)}', fontsize=16)
         ax_roti.legend()
 
     else:
@@ -249,11 +258,13 @@ def plot_single_map(filename, output_file, time_key_str, index_ratios_file, flar
     ax_distance.set_xlabel('Distance from Subsolar Point', fontsize=14)
     ax_distance.set_ylabel('Frequency', fontsize=14)
     ax_distance.set_title('Distance Distribution: Day vs Night', fontsize=16)
+    ax_distance.set_yscale('log')
     ax_distance.legend()
     plt.savefig(output_file, bbox_inches='tight')
     plt.close(fig)
 
 if __name__ == "__main__":
+
     data_file = sys.argv[1]
     output_file = sys.argv[2]
     time_key_str = sys.argv[3]
@@ -261,5 +272,6 @@ if __name__ == "__main__":
     flare_data_file = sys.argv[5]
     goes_file = sys.argv[6]
     tr_file = sys.argv[7]
+    maps_sun_file = sys.argv[8]
     
-    plot_single_map(data_file, output_file, time_key_str, index_ratios_file, flare_data_file, goes_file, tr_file)
+    plot_single_map(data_file, output_file, time_key_str, index_ratios_file, flare_data_file, goes_file, tr_file, maps_sun_file)
