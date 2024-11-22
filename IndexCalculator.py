@@ -1,35 +1,24 @@
-import h5py
 import numpy as np
-# import matplotlib
-# matplotlib.use('Agg')
-from numpy.typing import NDArray
+import sunpy
 import datetime
 import math
-from dateutil import tz
-from numpy import sin, cos, arccos, pi, arcsin
+
+from numpy import sin, cos, arccos, pi
 from concurrent.futures import ThreadPoolExecutor
 from tqdm import tqdm
-import cartopy.crs as ccrs
-import matplotlib.colors as mcolors
-import matplotlib.pyplot as plt
 from sunpy.net import Fido
 from sunpy.net import attrs as a
 from astropy.time import Time
 from pathlib import Path
 import imageio.v3 as iio
-from enum import Enum
 from sunpy.timeseries import TimeSeries
 import time as tm
 
+from MapMask import MapMask
 
-
-import sunpy.map
-import sunpy.data.sample
 from astropy.coordinates import SkyCoord
 import astropy.units as u
 
-from astropy.visualization import ImageNormalize, SqrtStretch
-# from sunpy.visualization.imageanimator import ImageAnimator
 
 from utils import get_latlon, retrieve_data, RE_meters, _UTC, TIME_FORMAT
 import json
@@ -243,8 +232,16 @@ class IndexCalculator:
         nights = []
         count = 0
 
-        latitudes = np.array([point[0] for point in points])
-        longitudes = np.array([point[1] for point in points])
+        self.map_mask = MapMask(10, 20)
+        selected_cells = [i for i in range(36, 144)] + [i for i in range(216, 275)] + [i for i in range(279, 290)] + [i for i in range(301, 306)]
+        filtered_points = self.map_mask.filter_points(np.array(points), selected_cells)
+        folder_name = Path(f"{self.start_date.strftime('%Y%m%d')}_full")
+        folder_name.mkdir(parents=True, exist_ok=True)
+        name = time.strftime('%Y_%m_%d_%H_%M_%S')+".png"
+        # self.map_mask.visualize_on_map_cartopy(selected_cells=selected_cells, points=filtered_points, save_path=f'./test/{name}')
+
+        latitudes = np.array([point[0] for point in filtered_points])
+        longitudes = np.array([point[1] for point in filtered_points])
 
         late, lone = get_latlon(time)
 
@@ -252,9 +249,9 @@ class IndexCalculator:
         lone_array = np.full(latitudes.shape, lone)
 
         distances = self.great_circle_distance_numpy(late_array, lone_array, latitudes, longitudes)
-
+        total_points = len(filtered_points)
         with tqdm(total=total_points, desc=f"Обработка точек для {time.strftime('%Y-%m-%d %H:%M:%S')}", leave=False) as point_progress:
-            for i, point in enumerate(points):
+            for i, point in enumerate(filtered_points):
                 d = distances[i]
                 if self.is_daytime(point[0], point[1], time):
                     days.append((d, point[2]))
@@ -279,8 +276,10 @@ class IndexCalculator:
         results = Fido.search(tr, a.Instrument.xrs & a.goes.SatelliteNumber(15) & a.Resolution("avg1m"))
         files = Fido.fetch(results)
         goes = TimeSeries(files)
+        print(goes)
         if isinstance(goes, list):
             goes = goes[0] if len(goes) > 0 else []
+        print(goes)
         folder_name = Path(f"{self.start_date.strftime('%Y%m%d')}_full")
         folder_name.mkdir(parents=True, exist_ok=True)
 
@@ -309,19 +308,20 @@ class IndexCalculator:
         min_y = min(flare_y)
         max_y = max(flare_y)
 
-        buffer = 100 * u.arcsec
+        buffer = 500 * u.arcsec
         min_x -= buffer
         max_x += buffer
         min_y -= buffer
         max_y += buffer
-
-        bottom_left = SkyCoord(min_x, min_y, obstime=self.start_date.strftime('%Y-%m-%dT%H:%M:%S'), observer="earth", frame="helioprojective")
-        top_right = SkyCoord(max_x, max_y, obstime=self.start_date.strftime('%Y-%m-%dT%H:%M:%S'), observer="earth", frame="helioprojective")
+        start_time = Time(self.start_date.strftime('%Y-%m-%dT%H:%M:%S'), scale='utc', format='isot')
+        end_time = Time(self.end_date.strftime('%Y-%m-%dT%H:%M:%S'), scale='utc', format='isot')
+        bottom_left = SkyCoord(min_x, min_y, obstime=start_time, observer="earth", frame="helioprojective")
+        top_right = SkyCoord(max_x, max_y, obstime=start_time, observer="earth", frame="helioprojective")
 
         cutout = a.jsoc.Cutout(bottom_left, top_right=top_right, tracking=True)
-
+        
         query = Fido.search(
-            a.Time(self.times[0].strftime('%Y-%m-%dT%H:%M:%S'), self.times[-1].strftime('%Y-%m-%dT%H:%M:%S')),
+            a.Time(start_time, end_time),
             a.Wavelength(171*u.angstrom),
             a.Sample(1*u.min),
             a.jsoc.Series.aia_lev1_euv_12s,   
@@ -329,12 +329,13 @@ class IndexCalculator:
             a.jsoc.Notify('nikita.bagulov.arshan@gmail.com'),
             # cutout
         )
-        files = Fido.fetch(query)
-        print(files)
+        # files = Fido.fetch(query)
+        files = []
+        print(query)
         files.sort()
         print(len(self.times), len(files))
-        maps_sun = {key.strftime('%Y-%m-%dT%H:%M:%S'): value for key, value in zip(self.times, files)}
-        print(maps_sun.keys())
+        # maps_sun = {key.strftime('%Y-%m-%dT%H:%M:%S'): value for key, value in zip(self.times, files)}
+        maps_sun = {}
 
         maps_sun_file = folder_name / "maps_sun.pickle"
         with open(maps_sun_file, 'wb') as f:

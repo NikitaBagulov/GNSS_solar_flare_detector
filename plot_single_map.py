@@ -4,12 +4,9 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import matplotlib.colors as mcolors
-from astropy.time import Time
-from pathlib import Path
 import datetime
 from utils import get_latlon, retrieve_data, _UTC
 from enum import Enum
-from sunpy.net import attrs as a
 import sunpy.map
 import sunpy.data.sample
 from astropy.coordinates import SkyCoord
@@ -17,8 +14,31 @@ import astropy.units as u
 import pickle
 import numpy as np
 from IndexCalculator import IndexCalculator
-from sunpy.net import Fido
+from MapMask import MapMask
 
+
+DEFAULT_PARAMS = {
+    'font.size': 20,
+    'figure.dpi': 300,
+    'font.family': 'serif',
+    'font.style': 'normal',
+    'font.weight': 'light',
+    'legend.frameon': True,
+    'font.variant': 'small-caps',
+    'axes.titlesize': 20,
+    'axes.labelsize': 20,
+    'xtick.labelsize': 18,
+    'xtick.major.pad': 5,
+    'ytick.major.pad': 5,
+    'xtick.major.width': 2.5,
+    'ytick.major.width': 2.5,
+    'xtick.minor.width': 2.5,
+    'ytick.minor.width': 2.5,
+    'ytick.labelsize': 20,
+    'legend.fontsize': 8
+}
+
+plt.rcParams.update(DEFAULT_PARAMS)
 
 class FlarePosition(Enum):
     CENTRAL = "central"
@@ -83,23 +103,38 @@ def plot_single_map(filename, output_file, time_key_str, index_ratios_file, flar
 
     with open(maps_sun_file, 'rb') as f:
         maps_sun = pickle.load(f)
-    print(maps_sun.values())
     time_key = datetime.datetime.fromisoformat(time_key_str)
     data_points = retrieve_data(filename)[time_key.replace(tzinfo=_UTC)]
 
     vmin, vmax = 0.0, 0.5
     cmap = mcolors.LinearSegmentedColormap.from_list("custom_cmap", ["blue", "cyan", "yellow", "red"])
     flare_travel_time = datetime.timedelta(minutes=8.5)
-    fig = plt.figure(figsize=(16, 12))
+    fig = plt.figure(figsize=(18, 12))
     gs = fig.add_gridspec(3, 2, height_ratios=[4, 1, 1], width_ratios=[2, 1],hspace=0.3, wspace=0.4)
     ax_map = fig.add_subplot(gs[0, 0], projection=ccrs.PlateCarree())
     ax_map.set_extent([-180, 180, -90, 90])
     ax_map.coastlines()
     ax_map.set_title(f'Data map at {time_key.strftime("%Y-%m-%d %H:%M:%S")}', fontsize=16)
     
-    latitudes = [point[0] for point in data_points]
-    longitudes = [point[1] for point in data_points]
-    values = [point[2] for point in data_points]
+
+    map_mask = MapMask(10, 20)
+    selected_cells = [i for i in range(36, 144)] + [i for i in range(216, 275)] + [i for i in range(279, 290)] + [i for i in range(301, 306)]
+    for idx, cell in enumerate(map_mask.grid):
+            min_lat, max_lat, min_lon, max_lon = cell
+            rect = plt.Rectangle((min_lon, min_lat), max_lon - min_lon, max_lat - min_lat,
+                                linewidth=1, edgecolor='gray', facecolor='none')
+            ax_map.add_patch(rect)
+
+            if selected_cells and idx in selected_cells:
+                rect.set_facecolor('blue')
+                rect.set_alpha(0.6)
+    
+    filtered_points = data_points
+    # filtered_points = map_mask.filter_points(np.array(data_points), selected_cells)
+
+    latitudes = [point[0] for point in filtered_points]
+    longitudes = [point[1] for point in filtered_points]
+    values = [point[2] for point in filtered_points]
     
     scatter = ax_map.scatter(longitudes, latitudes, c=values, cmap=cmap, s=10, vmin=vmin, vmax=vmax, transform=ccrs.PlateCarree())
     cbar = plt.colorbar(scatter, ax=ax_map, fraction=0.046 * (ax_map.get_position().height / ax_map.get_position().width), pad=0.04)
@@ -123,23 +158,22 @@ def plot_single_map(filename, output_file, time_key_str, index_ratios_file, flar
     ax_index.set_xlim(tr.start.to_datetime(), tr.end.to_datetime())
 
     ax_goes = fig.add_subplot(gs[2, 0])
-    if isinstance(goes, list):
-        if len(goes) > 0:
-            goes.plot(axes=ax_goes)
-    ax_goes.set_title('Solar Activity (GOES XRS)')
-    ax_goes.axvline(x=time_key, color='red', linestyle='-', label='Current time')
-    ax_goes.annotate(text="      Current time",xy=(time_key, max(ratios)),
-                        xytext=(time_key, max(ratios) * 1.1),
-                        arrowprops=dict(facecolor="red", shrink=0.05, width=1, headwidth=6),
-                        fontsize=10, ha='center', rotation='vertical'
-                    )
-    ax_goes.set_xlim(tr.start.to_datetime(), tr.end.to_datetime())
-    ax_goes.set_yscale('log')
-    flare_levels = [1e-2, 1e-3, 1e-4, 1e-5, 1e-6, 1e-7, 1e-8, 1e-9, 1e-10]
-    for level in flare_levels:
-        ax_goes.axhline(y=level, color='gray', linestyle='--', linewidth=0.5)
-    ax_goes.set_yticks(flare_levels)
-    ax_goes.get_yaxis().set_major_formatter(plt.LogFormatter(base=10))
+    if not isinstance(goes, list):
+        goes.plot(axes=ax_goes)
+        ax_goes.set_title('Solar Activity (GOES XRS)')
+        ax_goes.axvline(x=time_key, color='red', linestyle='-', label='Current time')
+        ax_goes.annotate(text="      Current time",xy=(time_key, max(ratios)),
+                            xytext=(time_key, max(ratios) * 1.1),
+                            arrowprops=dict(facecolor="red", shrink=0.05, width=1, headwidth=6),
+                            fontsize=10, ha='center', rotation='vertical'
+                        )
+        ax_goes.set_xlim(tr.start.to_datetime(), tr.end.to_datetime())
+        ax_goes.set_yscale('log')
+        flare_levels = [1e-2, 1e-3, 1e-4, 1e-5, 1e-6, 1e-7, 1e-8, 1e-9, 1e-10]
+        for level in flare_levels:
+            ax_goes.axhline(y=level, color='gray', linestyle='--', linewidth=0.5)
+        ax_goes.set_yticks(flare_levels)
+        ax_goes.get_yaxis().set_major_formatter(plt.LogFormatter(base=10))
             
         
             # Обработка вспышек
@@ -197,8 +231,9 @@ def plot_single_map(filename, output_file, time_key_str, index_ratios_file, flar
         sun_map = sunpy.map.Map(sunpy.data.sample.AIA_171_IMAGE)
     wcs = sun_map.wcs
     ax_sun = fig.add_subplot(gs[0, 1], projection=wcs)
+    # ax_sun = fig.add_subplot(gs[0, 1])
     sun_map.plot(axes=ax_sun)
-    sun_map.draw_limb()
+    # sun_map.draw_limb()
     for flare in flare_list:
         flare_lat = flare['hpc_y']
         flare_lon = flare['hpc_x']
@@ -238,6 +273,7 @@ def plot_single_map(filename, output_file, time_key_str, index_ratios_file, flar
         ax_roti.set_xlim(0, 0.5)
         ax_roti.set_ylabel('Frequency', fontsize=14)
         ax_roti.set_title(f'Distribution of Index ROTI (Daytime vs Nighttime). Total points: {len(roti_values_day) + len(roti_values_night)}', fontsize=16)
+        ax_roti.set_yscale('log')
         ax_roti.legend()
 
     else:
