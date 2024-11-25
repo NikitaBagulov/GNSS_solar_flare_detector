@@ -1,6 +1,8 @@
 import sys
 import matplotlib
 matplotlib.use('Agg')
+import matplotlib.dates as mdates
+from matplotlib.dates import AutoDateLocator
 import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import matplotlib.colors as mcolors
@@ -109,12 +111,12 @@ def plot_single_map(filename, output_file, time_key_str, index_ratios_file, flar
     vmin, vmax = 0.0, 0.5
     cmap = mcolors.LinearSegmentedColormap.from_list("custom_cmap", ["blue", "cyan", "yellow", "red"])
     flare_travel_time = datetime.timedelta(minutes=8.5)
-    fig = plt.figure(figsize=(18, 12))
+    fig = plt.figure(figsize=(18, 16))
     gs = fig.add_gridspec(3, 2, height_ratios=[4, 1, 1], width_ratios=[2, 1],hspace=0.3, wspace=0.4)
     ax_map = fig.add_subplot(gs[0, 0], projection=ccrs.PlateCarree())
     ax_map.set_extent([-180, 180, -90, 90])
     ax_map.coastlines()
-    ax_map.set_title(f'Data map at {time_key.strftime("%Y-%m-%d %H:%M:%S")}', fontsize=16)
+    ax_map.set_title(f'Data map at {time_key.strftime("%Y-%m-%d %H:%M:%S")}')
     
 
     map_mask = MapMask(10, 20)
@@ -146,36 +148,26 @@ def plot_single_map(filename, output_file, time_key_str, index_ratios_file, flar
     times, ratios = zip(*index_ratios)
     ax_index = fig.add_subplot(gs[1, 0])
     ax_index.plot(times, ratios, label='Индекс', color='orange', linewidth=2)
-    ax_index.set_xlabel('Time', fontsize=14)
-    ax_index.set_ylabel('Index', fontsize=14)
+
+    locator = AutoDateLocator()
+    formatter = mdates.DateFormatter('%H:%M:%S')
+
+    ax_index.xaxis.set_major_locator(locator)
+    ax_index.xaxis.set_major_formatter(formatter)
+
+    for label in ax_index.get_xticklabels():
+        label.set_horizontalalignment('right')
+
+    ax_index.set_xlabel('Time')
+    ax_index.set_ylabel('Index')
     ax_index.axvline(x=time_key, color='red', linestyle='-', label='Current time')
     ax_index.annotate(
-                        f'      Current time', xy=(time_key, max(ratios)),
+                        f'  Current time', xy=(time_key, max(ratios)),
                         xytext=(time_key, max(ratios) * 1.1),
                         arrowprops=dict(facecolor="red", shrink=0.05, width=1, headwidth=6),
-                        fontsize=10, ha='center', rotation='vertical'
+                        ha='center', rotation='vertical'
                     )
     ax_index.set_xlim(tr.start.to_datetime(), tr.end.to_datetime())
-
-    ax_goes = fig.add_subplot(gs[2, 0])
-    if not isinstance(goes, list):
-        goes.plot(axes=ax_goes)
-        ax_goes.set_title('Solar Activity (GOES XRS)')
-        ax_goes.axvline(x=time_key, color='red', linestyle='-', label='Current time')
-        ax_goes.annotate(text="      Current time",xy=(time_key, max(ratios)),
-                            xytext=(time_key, max(ratios) * 1.1),
-                            arrowprops=dict(facecolor="red", shrink=0.05, width=1, headwidth=6),
-                            fontsize=10, ha='center', rotation='vertical'
-                        )
-        ax_goes.set_xlim(tr.start.to_datetime(), tr.end.to_datetime())
-        ax_goes.set_yscale('log')
-        flare_levels = [1e-2, 1e-3, 1e-4, 1e-5, 1e-6, 1e-7, 1e-8, 1e-9, 1e-10]
-        for level in flare_levels:
-            ax_goes.axhline(y=level, color='gray', linestyle='--', linewidth=0.5)
-        ax_goes.set_yticks(flare_levels)
-        ax_goes.get_yaxis().set_major_formatter(plt.LogFormatter(base=10))
-            
-        
             # Обработка вспышек
     for flare in flare_list:
         flare_time = flare['start_time']
@@ -199,25 +191,47 @@ def plot_single_map(filename, output_file, time_key_str, index_ratios_file, flar
         if flare_peak_time:
             ax_index.axvline(x=flare_peak_time, color=flare_color, linestyle='--')
             ax_index.annotate(
-                        f'      {flare_class} (Sun)', xy=(flare_peak_time, max(ratios)),
+                        f'  {flare_class} (S)', xy=(flare_peak_time, max(ratios)),
                         xytext=(flare_peak_time, max(ratios) * 1.1),
                         arrowprops=dict(facecolor=flare_color, shrink=0.05, width=1, headwidth=6),
-                        fontsize=10, ha='center', rotation='vertical'
+                        ha='center', rotation='vertical'
                     )
                     # Время прибытия на Землю
             flare_arrival_time = flare_peak_time + flare_travel_time
             ax_index.axvline(x=flare_arrival_time, color=flare_color, linestyle='-')
             ax_index.annotate(
-                        f'      {flare_class} (Earth)', xy=(flare_arrival_time, max(ratios)),
+                        f'  {flare_class} (E)', xy=(flare_arrival_time, max(ratios)),
                         xytext=(flare_arrival_time, max(ratios) * 1.1),
                         arrowprops=dict(facecolor=flare_color, shrink=0.05, width=1, headwidth=6),
-                        fontsize=10, ha='center', rotation='vertical'
+                        ha='center', rotation='vertical'
                     )
 
                 # Время окончания вспышки
         if flare_end_time:
             ax_index.axvline(x=flare_end_time, color=flare_color, linestyle='--')
             ax_index.axvspan(flare_time, flare_end_time, color=flare_color, alpha=0.3)
+
+
+    ax_goes = fig.add_subplot(gs[2, 0])
+    if not isinstance(goes, list):
+        goes.plot(axes=ax_goes)
+        ax_goes.set_title('Solar Activity (GOES XRS)')
+        ax_goes.axvline(x=time_key, color='red', linestyle='-', label='Current time')
+        ax_goes.annotate(text="Current time",xy=(time_key, max(ratios)),
+                            xytext=(time_key, max(ratios) * 1.1),
+                            arrowprops=dict(facecolor="red", shrink=0.05, width=1, headwidth=6),
+                            ha='center', rotation='vertical'
+                        )
+        ax_goes.set_xlim(tr.start.to_datetime(), tr.end.to_datetime())
+        ax_goes.set_yscale('log')
+        flare_levels = [1e-2, 1e-3, 1e-4, 1e-5, 1e-6, 1e-7, 1e-8, 1e-9, 1e-10]
+        for level in flare_levels:
+            ax_goes.axhline(y=level, color='gray', linestyle='--', linewidth=0.5)
+        ax_goes.set_yticks(flare_levels)
+        ax_goes.get_yaxis().set_major_formatter(plt.LogFormatter(base=10))
+            
+    ax_index.legend(loc='lower right')
+    
     ax_map.grid()
     ax_index.grid()
     ax_goes.grid()

@@ -15,6 +15,7 @@ from sunpy.timeseries import TimeSeries
 import time as tm
 
 from MapMask import MapMask
+from InteractiveMapMask import InteractiveMapMask
 
 from astropy.coordinates import SkyCoord
 import astropy.units as u
@@ -34,6 +35,7 @@ class IndexCalculator:
         self.end_date = self.times[-1]
         self.data = retrieve_data(self.file)
         self.index_ratios = self.calculate_ratios() 
+
 
     def get_flare_data(self):
         """
@@ -200,6 +202,17 @@ class IndexCalculator:
         
 
     def calculate_ratios(self):
+        self.first_map_mask = False
+        time_key = self.times[0].replace(tzinfo=_UTC)
+        points = self.data.get(time_key, [])
+        self.map_mask = MapMask(10, 20)
+        self.interactive_map_mask = InteractiveMapMask(10, 20)
+        self.interactive_map_mask.visualize_on_map_cartopy(points=np.array(points))
+        self.interactive_map_mask.save_selected_cells("selected_cells.json")
+        self.selected_cells = self.interactive_map_mask.load_selected_cells("selected_cells.json")
+        
+        self.selected_cells = self.interactive_map_mask.get_selected_cells()
+        print(self.selected_cells)
         with ThreadPoolExecutor() as executor:
             results = list(executor.map(self.process_time, self.times))
         return results
@@ -231,10 +244,13 @@ class IndexCalculator:
         days = []
         nights = []
         count = 0
-
-        self.map_mask = MapMask(10, 20)
-        selected_cells = [i for i in range(36, 144)] + [i for i in range(216, 275)] + [i for i in range(279, 290)] + [i for i in range(301, 306)]
-        filtered_points = self.map_mask.filter_points(np.array(points), selected_cells)
+        # if not self.first_map_mask:
+        #     self.map_mask = MapMask(10, 20)
+        #     self.interactive_map_mask = InteractiveMapMask(10, 20)
+        #     self.interactive_map_mask.visualize_on_map_cartopy(np.array(points))
+        #     self.selected_cells = self.interactive_map_mask.get_selected_cells()
+        # selected_cells = [i for i in range(36, 144)] + [i for i in range(216, 275)] + [i for i in range(279, 290)] + [i for i in range(301, 306)]
+        filtered_points = self.interactive_map_mask.filter_points(np.array(points), self.selected_cells)
         folder_name = Path(f"{self.start_date.strftime('%Y%m%d')}_full")
         folder_name.mkdir(parents=True, exist_ok=True)
         name = time.strftime('%Y_%m_%d_%H_%M_%S')+".png"
