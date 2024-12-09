@@ -2,7 +2,7 @@ import sys
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.dates as mdates
-from matplotlib.dates import AutoDateLocator
+from matplotlib.dates import MinuteLocator, AutoDateLocator
 import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import matplotlib.colors as mcolors
@@ -16,7 +16,7 @@ import astropy.units as u
 import pickle
 import numpy as np
 from IndexCalculator import IndexCalculator
-from MapMask import MapMask
+from InteractiveMapMask import InteractiveMapMask
 
 
 DEFAULT_PARAMS = {
@@ -112,15 +112,16 @@ def plot_single_map(filename, output_file, time_key_str, index_ratios_file, flar
     cmap = mcolors.LinearSegmentedColormap.from_list("custom_cmap", ["blue", "cyan", "yellow", "red"])
     flare_travel_time = datetime.timedelta(minutes=8.5)
     fig = plt.figure(figsize=(18, 16))
-    gs = fig.add_gridspec(3, 2, height_ratios=[4, 1, 1], width_ratios=[2, 1],hspace=0.3, wspace=0.4)
+    gs = fig.add_gridspec(3, 2, height_ratios=[2, 1, 1], width_ratios=[2, 1],hspace=0.4, wspace=0.3)
     ax_map = fig.add_subplot(gs[0, 0], projection=ccrs.PlateCarree())
     ax_map.set_extent([-180, 180, -90, 90])
     ax_map.coastlines()
     ax_map.set_title(f'Data map at {time_key.strftime("%Y-%m-%d %H:%M:%S")}')
     
 
-    map_mask = MapMask(10, 20)
-    selected_cells = [i for i in range(36, 144)] + [i for i in range(216, 275)] + [i for i in range(279, 290)] + [i for i in range(301, 306)]
+    map_mask = InteractiveMapMask(10, 20)
+    # selected_cells = [i for i in range(36, 144)] + [i for i in range(216, 275)] + [i for i in range(279, 290)] + [i for i in range(301, 306)]
+    selected_cells = map_mask.load_selected_cells("selected_cells.txt")
     for idx, cell in enumerate(map_mask.grid):
             min_lat, max_lat, min_lon, max_lon = cell
             rect = plt.Rectangle((min_lon, min_lat), max_lon - min_lon, max_lat - min_lat,
@@ -131,8 +132,8 @@ def plot_single_map(filename, output_file, time_key_str, index_ratios_file, flar
                 rect.set_facecolor('blue')
                 rect.set_alpha(0.6)
     
-    filtered_points = data_points
-    # filtered_points = map_mask.filter_points(np.array(data_points), selected_cells)
+    # filtered_points = data_points
+    filtered_points = map_mask.filter_points(np.array(data_points), selected_cells)
 
     latitudes = [point[0] for point in filtered_points]
     longitudes = [point[1] for point in filtered_points]
@@ -140,7 +141,7 @@ def plot_single_map(filename, output_file, time_key_str, index_ratios_file, flar
     
     scatter = ax_map.scatter(longitudes, latitudes, c=values, cmap=cmap, s=10, vmin=vmin, vmax=vmax, transform=ccrs.PlateCarree())
     cbar = plt.colorbar(scatter, ax=ax_map, fraction=0.046 * (ax_map.get_position().height / ax_map.get_position().width), pad=0.04)
-    cbar.set_label('Value')
+    cbar.set_label('ROTI')
 
     plot_terminator(ax_map, time_key)
 
@@ -149,24 +150,18 @@ def plot_single_map(filename, output_file, time_key_str, index_ratios_file, flar
     ax_index = fig.add_subplot(gs[1, 0])
     ax_index.plot(times, ratios, label='Индекс', color='orange', linewidth=2)
 
-    locator = AutoDateLocator()
-    formatter = mdates.DateFormatter('%H:%M:%S')
+    locator = MinuteLocator(interval=20)
+
+    formatter = mdates.DateFormatter('%H:%M')
 
     ax_index.xaxis.set_major_locator(locator)
     ax_index.xaxis.set_major_formatter(formatter)
 
-    for label in ax_index.get_xticklabels():
-        label.set_horizontalalignment('right')
-
     ax_index.set_xlabel('Time')
     ax_index.set_ylabel('Index')
-    ax_index.axvline(x=time_key, color='red', linestyle='-', label='Current time')
-    ax_index.annotate(
-                        f'  Current time', xy=(time_key, max(ratios)),
-                        xytext=(time_key, max(ratios) * 1.1),
-                        arrowprops=dict(facecolor="red", shrink=0.05, width=1, headwidth=6),
-                        ha='center', rotation='vertical'
-                    )
+    line = ax_index.axvline(x=time_key, color='red', linestyle='-', label='Current time')
+    flare_lines=[]
+    flare_lines.append((line, f'Current time'))
     ax_index.set_xlim(tr.start.to_datetime(), tr.end.to_datetime())
             # Обработка вспышек
     for flare in flare_list:
@@ -185,32 +180,25 @@ def plot_single_map(filename, output_file, time_key_str, index_ratios_file, flar
 
                 # Время начала вспышки
         if flare_time:
-            ax_index.axvline(x=flare_time, color=flare_color, linestyle='--')
+            ax_index.axvline(x=flare_time, linestyle='--')
                 
-                # Пиковое время
+
         if flare_peak_time:
-            ax_index.axvline(x=flare_peak_time, color=flare_color, linestyle='--')
-            ax_index.annotate(
-                        f'  {flare_class} (S)', xy=(flare_peak_time, max(ratios)),
-                        xytext=(flare_peak_time, max(ratios) * 1.1),
-                        arrowprops=dict(facecolor=flare_color, shrink=0.05, width=1, headwidth=6),
-                        ha='center', rotation='vertical'
-                    )
+            line = ax_index.axvline(x=flare_peak_time, linestyle='--')
+            flare_lines.append((line, f'{flare_class} (S)'))
                     # Время прибытия на Землю
             flare_arrival_time = flare_peak_time + flare_travel_time
-            ax_index.axvline(x=flare_arrival_time, color=flare_color, linestyle='-')
-            ax_index.annotate(
-                        f'  {flare_class} (E)', xy=(flare_arrival_time, max(ratios)),
-                        xytext=(flare_arrival_time, max(ratios) * 1.1),
-                        arrowprops=dict(facecolor=flare_color, shrink=0.05, width=1, headwidth=6),
-                        ha='center', rotation='vertical'
-                    )
+            line = ax_index.axvline(x=flare_arrival_time, linestyle='-')
+            flare_lines.append((line, f'{flare_class} (E)'))
 
                 # Время окончания вспышки
         if flare_end_time:
-            ax_index.axvline(x=flare_end_time, color=flare_color, linestyle='--')
-            ax_index.axvspan(flare_time, flare_end_time, color=flare_color, alpha=0.3)
+            ax_index.axvline(x=flare_end_time, linestyle='--')
+            ax_index.axvspan(flare_time, flare_end_time, alpha=0.3)
 
+
+    handles, labels = zip(*flare_lines)
+    ax_index.legend(handles=handles, labels=labels, loc='lower right')
 
     ax_goes = fig.add_subplot(gs[2, 0])
     if not isinstance(goes, list):
@@ -229,8 +217,6 @@ def plot_single_map(filename, output_file, time_key_str, index_ratios_file, flar
             ax_goes.axhline(y=level, color='gray', linestyle='--', linewidth=0.5)
         ax_goes.set_yticks(flare_levels)
         ax_goes.get_yaxis().set_major_formatter(plt.LogFormatter(base=10))
-            
-    ax_index.legend(loc='lower right')
     
     ax_map.grid()
     ax_index.grid()
@@ -254,7 +240,9 @@ def plot_single_map(filename, output_file, time_key_str, index_ratios_file, flar
         coord = SkyCoord(flare_lon*u.arcsec, flare_lat*u.arcsec, frame=sun_map.coordinate_frame)
         ax_sun.plot_coord(coord, 'o-', markersize=5, label=f'{flare["class"]}')
         ax_sun.legend()
-
+    ax_sun.coords[1].set_ticks_position('r')  # 'r' означает 'right' (правая сторона)
+    ax_sun.coords[1].set_axislabel_position('r')
+    ax_sun.coords[1].set_ticklabel_position('r')
     
 
     ax_sun.set_title('Sun with Flare Positions')
@@ -283,10 +271,10 @@ def plot_single_map(filename, output_file, time_key_str, index_ratios_file, flar
         ax_roti.bar(roti_bins[:-1], roti_counts_day, width=width, bottom=roti_counts_night, color='orange', align='edge', label='Daytime')
 
         # Настройка осей и заголовков
-        ax_roti.set_xlabel('Index ROTI', fontsize=14)
+        ax_roti.set_xlabel('Index ROTI')
         ax_roti.set_xlim(0, 0.5)
-        ax_roti.set_ylabel('Frequency', fontsize=14)
-        ax_roti.set_title(f'Distribution of Index ROTI (Daytime vs Nighttime). Total points: {len(roti_values_day) + len(roti_values_night)}', fontsize=16)
+        ax_roti.set_ylabel('Frequency')
+        ax_roti.set_title(f'Distribution of Index ROTI.\n Total points: {len(roti_values_day) + len(roti_values_night)}')
         ax_roti.set_yscale('log')
         ax_roti.legend()
 
@@ -305,9 +293,10 @@ def plot_single_map(filename, output_file, time_key_str, index_ratios_file, flar
     ax_distance = fig.add_subplot(gs[2, 1])
     ax_distance.hist(day_points, bins=20, alpha=0.7, label='Day', color='gold')
     ax_distance.hist(night_points, bins=20, alpha=0.7, label='Night', color='navy')
-    ax_distance.set_xlabel('Distance from Subsolar Point', fontsize=14)
-    ax_distance.set_ylabel('Frequency', fontsize=14)
-    ax_distance.set_title('Distance Distribution: Day vs Night', fontsize=16)
+    ax_distance.set_xlabel('Distance from Subsolar Point')
+    ax_distance.set_ylabel('Frequency')
+    ax_distance.set_title('Distance Distribution'
+    )
     ax_distance.set_yscale('log')
     ax_distance.legend()
     plt.savefig(output_file, bbox_inches='tight')

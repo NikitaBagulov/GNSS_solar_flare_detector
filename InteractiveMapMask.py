@@ -30,9 +30,18 @@ class InteractiveMapMask(MapMask):
             # Обновить отображение
             self.update_visualization()
 
-    def visualize_on_map_cartopy(self, selected_cells=None, points=None):
-        """Инициализировать отображение карты и подключить обработчик кликов."""
-        print("Initializing plot...")
+    def visualize_on_map_cartopy(self, load_from_file=False, file_path="selected_cells.txt", points=None):
+        """
+        Инициализировать отображение карты. 
+        Если load_from_file=True, загружает выбранные ячейки из файла.
+        Если False, позволяет выбрать ячейки вручную и сохранить их в файл.
+        """
+        if load_from_file and file_path:
+            print(f"Loading selected cells from {file_path}...")
+            self.load_selected_cells(file_path)
+            return self.get_selected_cells()  # Возврат загруженных ячеек
+
+        print("Initializing plot for manual selection...")
         self.fig, self.ax = plt.subplots(figsize=(10, 5), subplot_kw={'projection': ccrs.PlateCarree()})
 
         # Создаем сетку
@@ -45,13 +54,15 @@ class InteractiveMapMask(MapMask):
             )
             self.ax.add_patch(rect)
             self.rects.append(rect)
-        vmin, vmax = 0.0, 0.5
-        cmap = mcolors.LinearSegmentedColormap.from_list("custom_cmap", ["blue", "cyan", "yellow", "red"])
-        # Отображение точек
+
+        # Отображение точек, если указаны
         if points is not None:
             latitudes = [point[0] for point in points]
             longitudes = [point[1] for point in points]
             values = [point[2] for point in points]
+
+            vmin, vmax = 0.0, 0.5
+            cmap = mcolors.LinearSegmentedColormap.from_list("custom_cmap", ["blue", "cyan", "yellow", "red"])
 
             self.scatter = self.ax.scatter(
                 longitudes, latitudes, c=values, cmap=cmap, s=10, vmin=vmin, vmax=vmax,
@@ -71,17 +82,39 @@ class InteractiveMapMask(MapMask):
         self.update_visualization()
         plt.show()  # Оставить окно открытым, но не блокировать выполнение кода
 
-    def update_visualization(self):
-        """Обновить цвета ячеек на основе выбранных."""
-        for idx, rect in enumerate(self.rects):
-            if idx in self.selected_cells:
-                rect.set_facecolor('yellow')  # Яркое выделение для выбранных ячеек
-                rect.set_alpha(0.6)  # Сделать фон полупрозрачным
-            else:
-                rect.set_facecolor('none')  # Снять выделение
-                rect.set_alpha(0)  # Сделать ячейки невидимыми
+        if not load_from_file and file_path:
+            self.save_selected_cells(file_path)
+            return self.get_selected_cells()
 
-        self.fig.canvas.draw_idle()  # Перерисовать содержимое окна
+
+    def update_visualization(self, updated_idx=None):
+        """
+        Обновить цвета ячеек на основе выбранных. 
+        Если указан `updated_idx`, обновляется только одна ячейка.
+        """
+        if updated_idx is not None:
+            # Обновить только одну ячейку
+            rect = self.rects[updated_idx]
+            if updated_idx in self.selected_cells:
+                rect.set_facecolor('yellow')
+                rect.set_alpha(0.6)
+            else:
+                rect.set_facecolor('none')
+                rect.set_alpha(0.6)
+            rect.stale = True  # Сообщить matplotlib, что элемент изменен
+        else:
+            # Обновить все ячейки (используется для начальной отрисовки)
+            for idx, rect in enumerate(self.rects):
+                if idx in self.selected_cells:
+                    rect.set_facecolor('yellow')
+                    rect.set_alpha(0.6)
+                else:
+                    rect.set_facecolor('none')
+                    rect.set_alpha(0.6)
+                rect.stale = True
+
+        # Обновить только измененные элементы
+        self.ax.figure.canvas.draw()
 
     def get_selected_cells(self):
         """Возвращает выбранные ячейки как список."""
@@ -99,8 +132,8 @@ class InteractiveMapMask(MapMask):
         try:
             with open(file_path, 'r') as f:
                 self.selected_cells = set(json.load(f))
-                self.update_visualization()  # Обновить отображение после загрузки
+                # self.update_visualization()  # Обновить отображение после загрузки
                 return self.get_selected_cells()
-                print(f"Selected cells loaded from {file_path}.")
+                # print(f"Selected cells loaded from {file_path}.")
         except FileNotFoundError:
             print(f"File {file_path} not found. Starting with an empty selection.")

@@ -205,14 +205,10 @@ class IndexCalculator:
         self.first_map_mask = False
         time_key = self.times[0].replace(tzinfo=_UTC)
         points = self.data.get(time_key, [])
-        self.map_mask = MapMask(10, 20)
+
         self.interactive_map_mask = InteractiveMapMask(10, 20)
-        self.interactive_map_mask.visualize_on_map_cartopy(points=np.array(points))
-        self.interactive_map_mask.save_selected_cells("selected_cells.json")
-        self.selected_cells = self.interactive_map_mask.load_selected_cells("selected_cells.json")
-        
-        self.selected_cells = self.interactive_map_mask.get_selected_cells()
-        print(self.selected_cells)
+        self.selected_cells = self.interactive_map_mask.visualize_on_map_cartopy(load_from_file=False,points=np.array(points))
+
         with ThreadPoolExecutor() as executor:
             results = list(executor.map(self.process_time, self.times))
         return results
@@ -244,17 +240,13 @@ class IndexCalculator:
         days = []
         nights = []
         count = 0
-        # if not self.first_map_mask:
-        #     self.map_mask = MapMask(10, 20)
-        #     self.interactive_map_mask = InteractiveMapMask(10, 20)
-        #     self.interactive_map_mask.visualize_on_map_cartopy(np.array(points))
-        #     self.selected_cells = self.interactive_map_mask.get_selected_cells()
-        # selected_cells = [i for i in range(36, 144)] + [i for i in range(216, 275)] + [i for i in range(279, 290)] + [i for i in range(301, 306)]
-        filtered_points = self.interactive_map_mask.filter_points(np.array(points), self.selected_cells)
+        filtered_points = points
+        # filtered_points = self.interactive_map_mask.filter_points(np.array(points), self.selected_cells)
         folder_name = Path(f"{self.start_date.strftime('%Y%m%d')}_full")
         folder_name.mkdir(parents=True, exist_ok=True)
         name = time.strftime('%Y_%m_%d_%H_%M_%S')+".png"
-        # self.map_mask.visualize_on_map_cartopy(selected_cells=selected_cells, points=filtered_points, save_path=f'./test/{name}')
+
+        # filtered_points = points
 
         latitudes = np.array([point[0] for point in filtered_points])
         longitudes = np.array([point[1] for point in filtered_points])
@@ -336,18 +328,18 @@ class IndexCalculator:
 
         cutout = a.jsoc.Cutout(bottom_left, top_right=top_right, tracking=True)
         
-        query = Fido.search(
-            a.Time(start_time, end_time),
-            a.Wavelength(171*u.angstrom),
-            a.Sample(1*u.min),
-            a.jsoc.Series.aia_lev1_euv_12s,   
-            a.jsoc.Segment.image,
-            a.jsoc.Notify('nikita.bagulov.arshan@gmail.com'),
-            # cutout
-        )
+        # query = Fido.search(
+        #     a.Time(start_time, end_time),
+        #     a.Wavelength(171*u.angstrom),
+        #     a.Sample(1*u.min),
+        #     a.jsoc.Series.aia_lev1_euv_12s,   
+        #     a.jsoc.Segment.image,
+        #     a.jsoc.Notify('nikita.bagulov.arshan@gmail.com'),
+        #     # cutout
+        # )
         # files = Fido.fetch(query)
         files = []
-        print(query)
+        # print(query)
         files.sort()
         print(len(self.times), len(files))
         # maps_sun = {key.strftime('%Y-%m-%dT%H:%M:%S'): value for key, value in zip(self.times, files)}
