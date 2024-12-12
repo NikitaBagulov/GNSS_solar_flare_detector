@@ -207,7 +207,7 @@ class IndexCalculator:
         points = self.data.get(time_key, [])
 
         self.interactive_map_mask = InteractiveMapMask(10, 20)
-        self.selected_cells = self.interactive_map_mask.visualize_on_map_cartopy(load_from_file=False,points=np.array(points))
+        self.selected_cells = self.interactive_map_mask.visualize_on_map_cartopy(load_from_file=True,points=np.array(points))
 
         with ThreadPoolExecutor() as executor:
             results = list(executor.map(self.process_time, self.times))
@@ -284,10 +284,8 @@ class IndexCalculator:
         results = Fido.search(tr, a.Instrument.xrs & a.goes.SatelliteNumber(15) & a.Resolution("avg1m"))
         files = Fido.fetch(results)
         goes = TimeSeries(files)
-        print(goes)
         if isinstance(goes, list):
             goes = goes[0] if len(goes) > 0 else []
-        print(goes)
         folder_name = Path(f"{self.start_date.strftime('%Y%m%d')}_full")
         folder_name.mkdir(parents=True, exist_ok=True)
 
@@ -341,10 +339,9 @@ class IndexCalculator:
         files = []
         # print(query)
         files.sort()
-        print(len(self.times), len(files))
         # maps_sun = {key.strftime('%Y-%m-%dT%H:%M:%S'): value for key, value in zip(self.times, files)}
         maps_sun = {}
-
+        print(folder_name)
         maps_sun_file = folder_name / "maps_sun.pickle"
         with open(maps_sun_file, 'wb') as f:
             pickle.dump(maps_sun, f)

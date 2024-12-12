@@ -145,11 +145,17 @@ def plot_single_map(filename, output_file, time_key_str, index_ratios_file, flar
 
     plot_terminator(ax_map, time_key)
 
+    gl = ax_map.gridlines(draw_labels=True, linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
+    gl.top_labels = False  # Скрыть метки сверху
+    gl.right_labels = False  # Скрыть метки справа
+    ax_map.set_xlabel('Latitude')
+    ax_map.set_ylabel('Longitude')
+
             # График индексов
     times, ratios = zip(*index_ratios)
     ax_index = fig.add_subplot(gs[1, 0])
     ax_index.plot(times, ratios, label='Индекс', color='orange', linewidth=2)
-
+    ax_index.set_title('Day/Night Ratio Index')
     locator = MinuteLocator(interval=20)
 
     formatter = mdates.DateFormatter('%H:%M')

@@ -118,7 +118,6 @@ class InteractiveMapMask(MapMask):
 
     def get_selected_cells(self):
         """Возвращает выбранные ячейки как список."""
-        print(list(self.selected_cells))
         return list(self.selected_cells)
 
     def save_selected_cells(self, file_path):

@@ -28,19 +28,29 @@ class DataManager:
 
     def filter_roti_maps(self) -> List[Dict]:
         """
-        Фильтрует результаты запросов, оставляя только те, которые относятся к ROTI картам
-        и начинаются не раньше 2010 года.
+        Фильтрует результаты запросов, оставляя только уникальные записи, 
+        которые относятся к ROTI картам и начинаются не раньше 2010 года.
         """
+        seen = set()
         filtered_items = []
+
         for item in self.query_results:
-            if item.get('type') == 'map' and item.get('product_type').lower() == 'roti':
+            # Уникальный ключ для проверки на дублирование
+            unique_key = (item.get('type'), item.get('product_type', '').lower(), item.get('begin'))
+            
+            if unique_key in seen:
+                continue
+            
+            if item.get('type') == 'map' and item.get('product_type', '').lower() == 'roti':
                 begin_time_str = item.get('begin')
                 if begin_time_str:
                     begin_time = date_parser.parse(begin_time_str)
-                    if begin_time.year >= 2010:  # Оставляем только файлы после 2010 года
+                    if begin_time.year >= 2010:
                         filtered_items.append(item)
+                        seen.add(unique_key)
                     else:
                         print(f"Пропущен файл с датой до 2010 года: {begin_time_str}")
+
         return filtered_items
 
     def download_file(self, item: Dict, idx: int, total: int):
@@ -189,12 +199,36 @@ class DataManager:
             if 0 <= selected_index < len(roti_items):
                 self.download_file(roti_items[selected_index], selected_index + 1, 1)
                 self.process_files(roti_items, selected_index)
+
             else:
                 print(f"Неверный индекс файла. Допустимый диапазон: 0-{len(roti_items)-1}.")
         else:
             # Скачиваем и обрабатываем все файлы
             self.download_files(roti_items)
             self.process_files(roti_items)
+    def process_all_requests(email: str, download_folder: str = "downloaded_files"):
+        """
+        Создает объект DataManager, получает все доступные запросы и обрабатывает их последовательно.
+        """
+        # Создаем объект DataManager
+        data_manager = DataManager(email=email, download_folder=download_folder)
+        
+        # Получаем отфильтрованные элементы (только ROTI карты)
+        roti_items = data_manager.filter_roti_maps()
+        print(roti_items)
+        
+        if not roti_items:
+            print("Нет доступных ROTI карт для обработки.")
+            return
+        
+        # Обрабатываем каждый элемент поочередно
+        for idx, item in enumerate(roti_items):
+            try:
+                print(f"\n--- Обработка элемента {idx + 1} из {len(roti_items)} ---")
+                data_manager.download_file(item, idx + 1, len(roti_items))  # Скачиваем файл
+                data_manager.process_files(roti_items, idx)  # Обрабатываем файл
+            except Exception as e:
+                print(f"Ошибка при обработке элемента {idx + 1}: {e}")
 
 # Пример использования:
 # data_manager = DataManager(email='simurg30s@simurg.iszf.irk.ru')
